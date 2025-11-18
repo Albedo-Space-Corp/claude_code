@@ -1,4 +1,21 @@
 #!/usr/bin/env bash
+# ============================================================================
+# Claude Bedrock Wrapper Script
+# ============================================================================
+# Version: 2.0.0
+# Date:    2025-11-18
+# 
+# Description:
+#   Albedo's wrapper script for running Claude Code with AWS Bedrock. Provides
+#   interactive configuration for AWS profiles, model selection, and token
+#   limits. Supports both prod-it01-bedrock (SSO) and dev01 (DuploCloud).
+#
+# Usage:
+#   claude_bedrock.sh [--profile PROFILE] [--defaults] [--model-name NAME]
+#                     [--max-output-tokens N] [--max-thinking-tokens N]
+#
+# ============================================================================
+
 set -eo pipefail
 
 # Default to prod profile, but allow override via --profile parameter
