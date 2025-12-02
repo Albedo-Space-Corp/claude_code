@@ -2,7 +2,7 @@
 # ============================================================================
 # Claude Bedrock Wrapper Script
 # ============================================================================
-# Version: 2.0.0
+# Version: 2.0.1
 # Date:    2025-11-18
 # 
 # Description:
@@ -175,10 +175,9 @@ if [[ "$USE_DEFAULTS" == false ]]; then
   echo "=================================="
   echo "1) Claude Sonnet 4.5 (default)"
   echo "2) Claude Haiku 4.5"
-  echo "3) Opus 4.1"
-  echo "4) Claude Sonnet 4"
+  echo "3) Opus 4.5"
   echo ""
-  echo -n "Enter your choice [1-4] (press Enter for default): "
+  echo -n "Enter your choice [1-3] (press Enter for default): "
   read -r model_choice
 
   # Set search pattern and display name based on selection
@@ -189,14 +188,9 @@ if [[ "$USE_DEFAULTS" == false ]]; then
       MODEL_NAME="Claude Haiku 4.5"
       ;;
     3)
-      echo "Selected: Opus 4.1"
-      MODEL_SEARCH="opus-4-1"  # Opus 4.1 pattern
-      MODEL_NAME="Opus 4.1"
-      ;;
-    4)
-      echo "Selected: Claude Sonnet 4"
-      MODEL_SEARCH="sonnet-4-20250514"  # Sonnet 4 pattern
-      MODEL_NAME="Claude Sonnet 4"
+      echo "Selected: Opus 4.5"
+      MODEL_SEARCH="opus-4-5"  # Opus 4.5 pattern
+      MODEL_NAME="Opus 4.5"
       ;;
     *)
       echo "Selected: Claude Sonnet 4.5 (default)"
