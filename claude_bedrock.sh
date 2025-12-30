@@ -2,17 +2,22 @@
 # ============================================================================
 # Claude Bedrock Wrapper Script
 # ============================================================================
-# Version: 2.0.1
-# Date:    2025-11-18
-# 
+# Version: 3.0.0
+# Date:    2025-12-30
+#
 # Description:
 #   Albedo's wrapper script for running Claude Code with AWS Bedrock. Provides
-#   interactive configuration for AWS profiles, model selection, and token
-#   limits. Supports both prod-it01-bedrock (SSO) and dev01 (DuploCloud).
+#   interactive configuration for model selection (OpusPlan, Opus, Sonnet) and
+#   token limits. Defaults to prod-it01-bedrock profile; supports dev01 via
+#   --profile argument. Uses new ANTHROPIC_DEFAULT_* environment variables.
 #
 # Usage:
 #   claude_bedrock.sh [--profile PROFILE] [--defaults] [--model-name NAME]
 #                     [--max-output-tokens N] [--max-thinking-tokens N]
+#
+# Examples:
+#   claude_bedrock.sh                    # Use prod-it01-bedrock with OpusPlan
+#   claude_bedrock.sh --profile dev01    # Use dev01 profile
 #
 # ============================================================================
 
@@ -58,8 +63,10 @@ done
 if [ "$USE_DEFAULTS" == true ]; then
   MAX_OUT=4096
   MAX_THINK=1024
-  MODEL_SEARCH="sonnet-4-5"
-  MODEL_NAME="Claude Sonnet 4.5"
+  MODEL_SEARCH_OPUS="opus-4-5"
+  MODEL_SEARCH_SONNET="sonnet-4-5"
+  MODEL_MODE="opusplan"
+  MODEL_NAME="OpusPlan (Opus + Sonnet)"
   echo "Using default settings: $MODEL_NAME, $MAX_OUT output tokens, $MAX_THINK thinking tokens"
 fi
 
@@ -121,26 +128,10 @@ echo "               It is ITAR compliant!"
 echo "=============================================================="
 echo ""
 
-if [[ "$USE_DEFAULTS" == false && "$PROFILE_SET_VIA_PARAM" == false ]]; then
-  # Profile selection menu
-  echo "Select AWS Profile:"
-  echo "==================="
-  echo "1) prod-it01-bedrock (default)"
-  echo "2) dev01 (legacy AWS Environment)"
-  echo ""
-  echo -n "Enter your choice [1-2] (press Enter for default): "
-  read -r profile_choice
-  
-  case "${profile_choice}" in
-    2)
-      PROFILE="dev01"
-      echo "Selected: dev01"
-      ;;
-    *)
-      PROFILE="prod-it01-bedrock"
-      echo "Selected: prod-it01-bedrock (default)"
-      ;;
-  esac
+# Profile defaults to prod-it01-bedrock unless --profile is specified
+# Example: claude_bedrock.sh --profile dev01
+if [[ "$PROFILE_SET_VIA_PARAM" == true ]]; then
+  echo "Using profile: $PROFILE (set via --profile argument)"
   echo ""
 fi
 
@@ -173,41 +164,43 @@ fi
 if [[ "$USE_DEFAULTS" == false ]]; then
   echo "Select the Claude model to use:"
   echo "=================================="
-  echo "1) Claude Sonnet 4.5 (default)"
-  echo "2) Claude Haiku 4.5"
-  echo "3) Opus 4.5"
+  echo "1) OpusPlan - Auto-switch between Opus (planning) and Sonnet (execution) (default)"
+  echo "2) Opus 4.5 - Force Opus for all operations"
+  echo "3) Sonnet 4.5 - Force Sonnet for all operations"
   echo ""
   echo -n "Enter your choice [1-3] (press Enter for default): "
   read -r model_choice
 
-  # Set search pattern and display name based on selection
+  # Set search patterns and display name based on selection
   case "${model_choice}" in
     2)
-      echo "Selected: Claude Haiku 4.5"
-      MODEL_SEARCH="haiku-4-5"  # Haiku 4.5 pattern
-      MODEL_NAME="Claude Haiku 4.5"
-      ;;
-    3)
       echo "Selected: Opus 4.5"
-      MODEL_SEARCH="opus-4-5"  # Opus 4.5 pattern
+      MODEL_SEARCH_OPUS="opus-4-5"
+      MODEL_MODE="opus"
       MODEL_NAME="Opus 4.5"
       ;;
+    3)
+      echo "Selected: Sonnet 4.5"
+      MODEL_SEARCH_SONNET="sonnet-4-5"
+      MODEL_MODE="sonnet"
+      MODEL_NAME="Sonnet 4.5"
+      ;;
     *)
-      echo "Selected: Claude Sonnet 4.5 (default)"
-      MODEL_SEARCH="sonnet-4-5"  # Claude Sonnet 4.5 pattern
-      MODEL_NAME="Claude Sonnet 4.5"
+      echo "Selected: OpusPlan (default)"
+      MODEL_SEARCH_OPUS="opus-4-5"
+      MODEL_SEARCH_SONNET="sonnet-4-5"
+      MODEL_MODE="opusplan"
+      MODEL_NAME="OpusPlan (Opus + Sonnet)"
       ;;
   esac
   echo ""
 
   echo "Higher value → Claude can return longer, more complete responses (e.g. full code snippets, detailed explanations). This comes at the cost of:"
   echo "  • Higher latency (responses take longer to stream back)."
-  echo "  • Higher costs (since Bedrock billing is proportional to input + output tokens)."
   echo "  • Greater risk of hitting AWS Bedrock model limits or timeouts if you set it too high."
   echo ""
   echo "Lower value → Claude's responses are cut off sooner. This improves:"
   echo "  • Response time (faster output)."
-  echo "  • Cost control (fewer tokens billed)."
   echo "  But you may get truncated answers, especially for code completions or explanations."
   echo ""
   echo "Configure Maximum Output Tokens:"
@@ -229,7 +222,6 @@ if [[ "$USE_DEFAULTS" == false ]]; then
     3)
       MAX_OUT=16384
       echo "Selected: 16,384 tokens"
-      echo "⚠️  WARNING: Higher token limits may result in slower response times and potential timeouts."
       ;;
     4)
       MAX_OUT=32768
@@ -262,7 +254,6 @@ if [[ "$USE_DEFAULTS" == false ]]; then
     3)
       MAX_THINK=4096
       echo "Selected: 4,096 tokens"
-      echo "⚠️  WARNING: Higher token limits may result in slower response times and potential timeouts."
       ;;
     4)
       MAX_THINK=8192
@@ -299,35 +290,114 @@ else
 fi
 echo ""
 
-# Find the system-defined inference profile for selected model
-MODEL_PROFILE_ARN="$(
+# Query for Haiku 4.5 ARN (replaces legacy Haiku 3.5)
+HAIKU_ARN="$(
   AWS_PROFILE="$PROFILE" AWS_REGION="$REGION" \
   aws bedrock list-inference-profiles --type-equals SYSTEM_DEFINED \
-  --query "inferenceProfileSummaries[?contains(inferenceProfileArn,'anthropic') && contains(inferenceProfileArn,'${MODEL_SEARCH}')].inferenceProfileArn | [0]" \
+  --query "inferenceProfileSummaries[?contains(inferenceProfileArn,'anthropic') && contains(inferenceProfileArn,'haiku-4-5')].inferenceProfileArn | [0]" \
   --output text
 )"
 
-if [[ -z "$MODEL_PROFILE_ARN" || "$MODEL_PROFILE_ARN" == "None" ]]; then
-  echo "Couldn't find a matching Claude model inference profile in $REGION."
-  echo "The selected model may not be available in your region."
-  echo "Please check Bedrock console for available models."
-  exit 1
+if [[ -z "$HAIKU_ARN" || "$HAIKU_ARN" == "None" ]]; then
+  echo "WARNING: Couldn't find Haiku 4.5 inference profile in $REGION."
+  echo "Falling back to legacy Haiku 3.5 model ID."
+  HAIKU_ARN="anthropic.claude-3-5-haiku-20241022-v1:0"
 fi
 
-SLOW="$MODEL_PROFILE_ARN"                     # <-- use profile ARN, not model ID
-FAST="anthropic.claude-3-5-haiku-20241022-v1:0"  # fine to keep a model ID that supports on-demand
+# Query for model ARNs based on selected mode
+case "$MODEL_MODE" in
+  opus)
+    OPUS_ARN="$(
+      AWS_PROFILE="$PROFILE" AWS_REGION="$REGION" \
+      aws bedrock list-inference-profiles --type-equals SYSTEM_DEFINED \
+      --query "inferenceProfileSummaries[?contains(inferenceProfileArn,'anthropic') && contains(inferenceProfileArn,'${MODEL_SEARCH_OPUS}')].inferenceProfileArn | [0]" \
+      --output text
+    )"
+    if [[ -z "$OPUS_ARN" || "$OPUS_ARN" == "None" ]]; then
+      echo "ERROR: Couldn't find Opus 4.5 inference profile in $REGION."
+      exit 1
+    fi
+    ;;
+  sonnet)
+    SONNET_ARN="$(
+      AWS_PROFILE="$PROFILE" AWS_REGION="$REGION" \
+      aws bedrock list-inference-profiles --type-equals SYSTEM_DEFINED \
+      --query "inferenceProfileSummaries[?contains(inferenceProfileArn,'anthropic') && contains(inferenceProfileArn,'${MODEL_SEARCH_SONNET}')].inferenceProfileArn | [0]" \
+      --output text
+    )"
+    if [[ -z "$SONNET_ARN" || "$SONNET_ARN" == "None" ]]; then
+      echo "ERROR: Couldn't find Sonnet 4.5 inference profile in $REGION."
+      exit 1
+    fi
+    ;;
+  opusplan)
+    OPUS_ARN="$(
+      AWS_PROFILE="$PROFILE" AWS_REGION="$REGION" \
+      aws bedrock list-inference-profiles --type-equals SYSTEM_DEFINED \
+      --query "inferenceProfileSummaries[?contains(inferenceProfileArn,'anthropic') && contains(inferenceProfileArn,'${MODEL_SEARCH_OPUS}')].inferenceProfileArn | [0]" \
+      --output text
+    )"
+    SONNET_ARN="$(
+      AWS_PROFILE="$PROFILE" AWS_REGION="$REGION" \
+      aws bedrock list-inference-profiles --type-equals SYSTEM_DEFINED \
+      --query "inferenceProfileSummaries[?contains(inferenceProfileArn,'anthropic') && contains(inferenceProfileArn,'${MODEL_SEARCH_SONNET}')].inferenceProfileArn | [0]" \
+      --output text
+    )"
+    if [[ -z "$OPUS_ARN" || "$OPUS_ARN" == "None" ]] || [[ -z "$SONNET_ARN" || "$SONNET_ARN" == "None" ]]; then
+      echo "ERROR: Couldn't find Opus 4.5 and/or Sonnet 4.5 inference profiles in $REGION."
+      exit 1
+    fi
+    ;;
+esac
 
 echo "AWS SSO profile : $PROFILE"
 echo "Region          : $REGION"
-echo "Main model      : $MODEL_NAME"
-echo "Model ARN       : $SLOW"
-echo "Fast model      : Haiku 3.5"
+echo "Model mode      : $MODEL_NAME"
+case "$MODEL_MODE" in
+  opus)
+    echo "Opus ARN        : $OPUS_ARN"
+    ;;
+  sonnet)
+    echo "Sonnet ARN      : $SONNET_ARN"
+    ;;
+  opusplan)
+    echo "Opus ARN        : $OPUS_ARN"
+    echo "Sonnet ARN      : $SONNET_ARN"
+    ;;
+esac
+echo "Haiku ARN       : $HAIKU_ARN"
 echo "Max output      : $MAX_OUT tokens"
 echo "Max thinking    : $MAX_THINK tokens"
 echo ""
 
-exec env \
-  AWS_PROFILE="$PROFILE" AWS_REGION="$REGION" CLAUDE_CODE_USE_BEDROCK=1 \
-  ANTHROPIC_MODEL="$SLOW" ANTHROPIC_SMALL_FAST_MODEL="$FAST" \
-  CLAUDE_CODE_MAX_OUTPUT_TOKENS="$MAX_OUT" MAX_THINKING_TOKENS="$MAX_THINK" \
-  claude "${claude_args[@]}"
+# Set environment variables based on model mode
+case "$MODEL_MODE" in
+  opus)
+    exec env \
+      AWS_PROFILE="$PROFILE" AWS_REGION="$REGION" CLAUDE_CODE_USE_BEDROCK=1 \
+      ANTHROPIC_DEFAULT_OPUS_MODEL="$OPUS_ARN" \
+      ANTHROPIC_DEFAULT_HAIKU_MODEL="$HAIKU_ARN" \
+      ANTHROPIC_MODEL="opus" \
+      CLAUDE_CODE_MAX_OUTPUT_TOKENS="$MAX_OUT" MAX_THINKING_TOKENS="$MAX_THINK" \
+      claude "${claude_args[@]}"
+    ;;
+  sonnet)
+    exec env \
+      AWS_PROFILE="$PROFILE" AWS_REGION="$REGION" CLAUDE_CODE_USE_BEDROCK=1 \
+      ANTHROPIC_DEFAULT_SONNET_MODEL="$SONNET_ARN" \
+      ANTHROPIC_DEFAULT_HAIKU_MODEL="$HAIKU_ARN" \
+      ANTHROPIC_MODEL="sonnet" \
+      CLAUDE_CODE_MAX_OUTPUT_TOKENS="$MAX_OUT" MAX_THINKING_TOKENS="$MAX_THINK" \
+      claude "${claude_args[@]}"
+    ;;
+  opusplan)
+    exec env \
+      AWS_PROFILE="$PROFILE" AWS_REGION="$REGION" CLAUDE_CODE_USE_BEDROCK=1 \
+      ANTHROPIC_DEFAULT_OPUS_MODEL="$OPUS_ARN" \
+      ANTHROPIC_DEFAULT_SONNET_MODEL="$SONNET_ARN" \
+      ANTHROPIC_DEFAULT_HAIKU_MODEL="$HAIKU_ARN" \
+      ANTHROPIC_MODEL="opusplan" \
+      CLAUDE_CODE_MAX_OUTPUT_TOKENS="$MAX_OUT" MAX_THINKING_TOKENS="$MAX_THINK" \
+      claude "${claude_args[@]}"
+    ;;
+esac
