@@ -70,6 +70,29 @@ if [ "$USE_DEFAULTS" == true ]; then
   echo "Using default settings: $MODEL_NAME, $MAX_OUT output tokens, $MAX_THINK thinking tokens"
 fi
 
+# Set MODEL_MODE based on MODEL_NAME if provided via command line
+if [[ -n "$MODEL_NAME" && -z "$MODEL_MODE" ]]; then
+  case "${MODEL_NAME,,}" in
+    *opusplan*)
+      MODEL_MODE="opusplan"
+      MODEL_SEARCH_OPUS="opus-4-5"
+      MODEL_SEARCH_SONNET="sonnet-4-5"
+      ;;
+    *opus*)
+      MODEL_MODE="opus"
+      MODEL_SEARCH_OPUS="opus-4-5"
+      ;;
+    *sonnet*)
+      MODEL_MODE="sonnet"
+      MODEL_SEARCH_SONNET="sonnet-4-5"
+      ;;
+    *)
+      echo "ERROR: Invalid model name '$MODEL_NAME'. Must contain 'opus', 'sonnet', or 'opusplan'."
+      exit 1
+      ;;
+  esac
+fi
+
 # Check if claude is installed
 if ! command -v claude &> /dev/null; then
   echo "It appears Claude Code is not installed."
