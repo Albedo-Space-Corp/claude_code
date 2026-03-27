@@ -118,7 +118,7 @@ fi
 # Step 2: Install basic tools (Linux only)
 if [ "$MACHINE" = "Linux" ]; then
     print_status "Installing basic tools (curl, micro, build-essential, xdg-utils, wslu)..."
-    sudo apt install -y curl micro build-essential xdg-utils wslu
+    sudo apt install -y curl micro build-essential xdg-utils wslu python3-pip
     print_success "Basic tools installed"
 fi
 
@@ -155,10 +155,41 @@ else
     print_success "Homebrew installed and configured"
 fi
 
-# Step 4: Install packages via Homebrew
-print_status "Installing AWS CLI and jq via Homebrew..."
-brew install awscli jq
-print_success "Homebrew packages installed"
+# Step 4: Install AWS CLI
+if command_exists aws; then
+    print_warning "AWS CLI already installed, skipping..."
+elif [ "$MACHINE" = "Mac" ]; then
+    print_status "Installing AWS CLI via official installer..."
+    curl -fsSL "https://awscli.amazonaws.com/AWSCLIV2.pkg" -o /tmp/AWSCLIV2.pkg
+    sudo installer -pkg /tmp/AWSCLIV2.pkg -target /
+    rm -f /tmp/AWSCLIV2.pkg
+    print_success "AWS CLI installed"
+else
+    print_status "Installing AWS CLI via Homebrew..."
+    brew install awscli
+    print_success "AWS CLI installed"
+fi
+
+# Step 4b: Install jq
+if command_exists jq; then
+    print_warning "jq already installed, skipping..."
+else
+    print_status "Installing jq..."
+    if command_exists brew && brew install jq; then
+        print_success "jq installed via Homebrew"
+    elif [ "$MACHINE" = "Mac" ]; then
+        print_status "Homebrew install failed, downloading jq binary..."
+        mkdir -p "$HOME/.local/bin"
+        JQ_ARCH="amd64"
+        if [ "$(uname -m)" = "arm64" ]; then JQ_ARCH="arm64"; fi
+        curl -fsSL "https://github.com/jqlang/jq/releases/latest/download/jq-macos-${JQ_ARCH}" -o "$HOME/.local/bin/jq"
+        chmod +x "$HOME/.local/bin/jq"
+        print_success "jq installed via binary download"
+    else
+        print_error "Failed to install jq"
+        exit 1
+    fi
+fi
 
 # Step 5: Create AWS configuration directory
 print_status "Creating AWS configuration directory..."
@@ -308,6 +339,63 @@ else
     print_success "Settings merged successfully"
 fi
 
+# Step 10: Setup S3 plugin marketplace (non-fatal — Bedrock setup is already complete)
+print_status "Setting up Albedo plugin marketplace..."
+
+MARKETPLACE_URL="s3://plugin-marketplace-prod-it01-${ACCOUNT_ID}/marketplace"
+MARKETPLACE_KEY="albedo-claude-plugin-marketplace"
+KNOWN_MARKETPLACES="$HOME/.claude/plugins/known_marketplaces.json"
+
+# Install git-remote-s3
+if command_exists git-remote-s3; then
+    print_warning "git-remote-s3 already installed, skipping..."
+else
+    print_status "Installing git-remote-s3..."
+    if command_exists uv; then
+        uv tool install git-remote-s3 || print_warning "uv tool install failed"
+    elif command_exists pipx; then
+        pipx install git-remote-s3 || print_warning "pipx install failed"
+    elif command_exists brew && brew install pipx 2>/dev/null; then
+        pipx install git-remote-s3 || print_warning "pipx install failed"
+    else
+        print_warning "Could not install git-remote-s3. Install manually: pipx install git-remote-s3"
+    fi
+
+    if command_exists git-remote-s3; then
+        print_success "git-remote-s3 installed"
+    else
+        print_warning "git-remote-s3 not found on PATH. Install manually: pipx install git-remote-s3"
+    fi
+fi
+
+# Validate S3 bucket access
+print_status "Validating marketplace access..."
+if aws s3 ls "s3://plugin-marketplace-prod-it01-${ACCOUNT_ID}/" --profile prod-it01-bedrock >/dev/null 2>&1; then
+    print_success "Marketplace bucket accessible"
+else
+    print_warning "Could not access marketplace bucket. The marketplace is registered but may not sync until access is granted."
+fi
+
+# Register marketplace in known_marketplaces.json
+mkdir -p "$HOME/.claude/plugins"
+
+if [ -f "$KNOWN_MARKETPLACES" ]; then
+    jq --arg key "$MARKETPLACE_KEY" \
+       --arg url "$MARKETPLACE_URL" \
+       --arg loc "$HOME/.claude/plugins/marketplaces/$MARKETPLACE_KEY" \
+       '.[$key] = {source: {source: "git", url: $url}, installLocation: $loc, lastUpdated: "1970-01-01T00:00:00.000Z"}' \
+       "$KNOWN_MARKETPLACES" > /tmp/known_marketplaces_tmp.json
+    mv /tmp/known_marketplaces_tmp.json "$KNOWN_MARKETPLACES"
+else
+    jq -n --arg key "$MARKETPLACE_KEY" \
+          --arg url "$MARKETPLACE_URL" \
+          --arg loc "$HOME/.claude/plugins/marketplaces/$MARKETPLACE_KEY" \
+          '{($key): {source: {source: "git", url: $url}, installLocation: $loc, lastUpdated: "1970-01-01T00:00:00.000Z"}}' \
+          > "$KNOWN_MARKETPLACES"
+fi
+
+print_success "Plugin marketplace registered"
+
 # Final steps
 echo
 echo -e "${GREEN}"
@@ -320,8 +408,8 @@ print_success "All tools installed and configured successfully!"
 echo
 print_status "Next steps:"
 echo "  1. Close and reopen your terminal, or run: source $SHELL_RC"
-echo "  2. Run: aws sso login --profile prod-it01-bedrock"
-echo "  3. Run: claude"
+echo "  2. Run: claude"
+echo "  3. Run /plugin inside Claude Code to browse the Albedo marketplace"
 echo
 print_warning "IMPORTANT: You may need to restart your terminal for all changes to take effect"
 echo
@@ -380,6 +468,20 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
         print_success "Claude Code Bedrock configuration: OK"
     else
         print_warning "Claude Code Bedrock configuration: Not verified"
+    fi
+
+    # Check git-remote-s3
+    if command_exists git-remote-s3; then
+        print_success "git-remote-s3: OK"
+    else
+        print_warning "git-remote-s3: NOT FOUND (needed for plugin marketplace)"
+    fi
+
+    # Check marketplace registration
+    if [ -f "$HOME/.claude/plugins/known_marketplaces.json" ] && grep -q "albedo-claude-plugin-marketplace" "$HOME/.claude/plugins/known_marketplaces.json"; then
+        print_success "Plugin marketplace: registered"
+    else
+        print_warning "Plugin marketplace: not registered"
     fi
 fi
 

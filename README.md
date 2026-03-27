@@ -9,14 +9,15 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Albedo-Space-Corp/claude_cod
 ```
 
 This installs:
-- Homebrew, AWS CLI, jq
-- Claude Code
+- AWS CLI, jq, Claude Code
 - AWS SSO profile (prod-it01-bedrock)
 - Bedrock configuration in `~/.claude/settings.json`
+- S3 plugin marketplace (git-remote-s3 + marketplace registration)
 
 After installation:
 ```bash
-claude
+claude                # Launch Claude Code
+/plugin               # Browse the Albedo plugin marketplace
 ```
 
 ## Update to v5.0.0 (Existing Users)
@@ -37,7 +38,7 @@ This updates your `~/.claude/settings.json` with the latest model ARNs while pre
 
 **Current Models:**
 - Opus 4.6
-- Sonnet 4.5 (latest available; Sonnet 5 pending release)
+- Sonnet 4.6
 - Haiku 4.5
 
 **Migration:** Configuration moved from wrapper script to `settings.json`. Just run `update_claude_code.sh` to migrate.
@@ -53,7 +54,7 @@ claude --resume
 
 # Launch with specific model
 claude --model opus      # Opus 4.6 for everything
-claude --model sonnet    # Sonnet 4.5 for everything
+claude --model sonnet    # Sonnet 4.6 for everything
 claude --model haiku     # Haiku 4.5 for everything
 
 # Switch models during session
@@ -62,9 +63,15 @@ claude --model haiku     # Haiku 4.5 for everything
 /model opusplan
 ```
 
+### Windows
+
+```powershell
+powershell -ExecutionPolicy Bypass -File setup_ccb.ps1
+```
+
 ## Requirements
 
-- macOS or Linux (Ubuntu/WSL)
+- macOS, Linux (Ubuntu/WSL), or Windows 10/11
 - AWS SSO access to Albedo's prod-it01 account
 - AlbedoBedrockUsers role permissions
 
@@ -76,31 +83,6 @@ See [CLAUDE.md](.claude/CLAUDE.md) for complete documentation including:
 - Model activation process
 - Troubleshooting guide
 - IAM policy reference
-
-## Known Issues
-
-### `/model` Menu Bug with Bedrock
-
-The interactive `/model` menu has a known bug when using Bedrock (see [#18674](https://github.com/anthropics/claude-code/issues/18674), [#17760](https://github.com/anthropics/claude-code/issues/17760), [#10169](https://github.com/anthropics/claude-code/issues/10169))
-
-**What works:**
-- Menu: "Default" → Sonnet 4.5 ✓
-- Menu: "Opus 4.1" (mislabeled) → Actually Opus 4.6 ✓
-- Menu: "Haiku" → Haiku 4.5 ✓
-- Typing: `/model opusplan` → OpusPlan ✓
-
-**What's broken:**
-- Menu: "Opus 4.6" → ❌ incomplete model ID
-- Menu: "Opus (1M context)" → ❌ invalid for Bedrock
-
-**Workaround:** Type the model name instead of using the menu:
-```
-/model opus
-/model sonnet
-/model opusplan
-```
-
-Or use CLI flags: `claude --model opus`
 
 ## Support
 

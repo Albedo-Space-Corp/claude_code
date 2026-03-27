@@ -301,6 +301,72 @@ if (Test-Path $claudeSettings) {
     Write-Ok "Settings file created"
 }
 
+# ── Step 7: Setup S3 plugin marketplace ───────────────────────────────
+Write-Status "Setting up Albedo plugin marketplace..."
+
+$MarketplaceUrl = "s3://plugin-marketplace-prod-it01-$accountId/marketplace"
+$MarketplaceKey = "albedo-claude-plugin-marketplace"
+$KnownMarketplaces = Join-Path $env:APPDATA "claude\plugins\known_marketplaces.json"
+
+# Install git-remote-s3
+if (Get-Command git-remote-s3 -ErrorAction SilentlyContinue) {
+    Write-Ok "git-remote-s3 already installed"
+} else {
+    Write-Status "Installing git-remote-s3..."
+    if (Get-Command uv -ErrorAction SilentlyContinue) {
+        uv tool install git-remote-s3
+    } elseif (Get-Command pipx -ErrorAction SilentlyContinue) {
+        pipx install git-remote-s3
+    } elseif (Get-Command pip -ErrorAction SilentlyContinue) {
+        pip install git-remote-s3
+    } else {
+        Write-Warn "No Python package manager found. Install git-remote-s3 manually: pip install git-remote-s3"
+    }
+
+    Refresh-Path
+    if (Get-Command git-remote-s3 -ErrorAction SilentlyContinue) {
+        Write-Ok "git-remote-s3 installed"
+    } else {
+        Write-Warn "git-remote-s3 not found on PATH. You may need to restart your terminal."
+    }
+}
+
+# Validate S3 bucket access
+Write-Status "Validating marketplace access..."
+aws s3 ls "s3://plugin-marketplace-prod-it01-$accountId/" --profile prod-it01-bedrock 2>&1 | Out-Null
+if ($LASTEXITCODE -eq 0) {
+    Write-Ok "Marketplace bucket accessible"
+} else {
+    Write-Warn "Could not access marketplace bucket. The marketplace is registered but may not sync until access is granted."
+}
+
+# Register marketplace in known_marketplaces.json
+$PluginDir = Split-Path $KnownMarketplaces
+if (-not (Test-Path $PluginDir)) {
+    New-Item -ItemType Directory -Path $PluginDir -Force | Out-Null
+}
+
+$Entry = @{
+    source = @{ source = "git"; url = $MarketplaceUrl }
+    installLocation = Join-Path $env:APPDATA "claude\plugins\marketplaces\$MarketplaceKey"
+    lastUpdated = "1970-01-01T00:00:00.000Z"
+}
+
+if (Test-Path $KnownMarketplaces) {
+    try {
+        $Data = Get-Content $KnownMarketplaces -Raw | ConvertFrom-Json -AsHashtable
+    } catch {
+        $Data = @{}
+    }
+    $Data[$MarketplaceKey] = $Entry
+} else {
+    $Data = @{ $MarketplaceKey = $Entry }
+}
+
+$jsonStr = $Data | ConvertTo-Json -Depth 4
+Write-Utf8NoBom -Path $KnownMarketplaces -Content $jsonStr
+Write-Ok "Plugin marketplace registered"
+
 # ── Verification ─────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "===========================================================" -ForegroundColor Green
@@ -353,10 +419,26 @@ if ((Test-Path $claudeSettings) -and (Select-String -Path $claudeSettings -Patte
     Write-Err "Claude Code Bedrock settings: NOT FOUND"
 }
 
+# git-remote-s3
+if (Get-Command git-remote-s3 -ErrorAction SilentlyContinue) {
+    Write-Ok "git-remote-s3: installed"
+} else {
+    Write-Warn "git-remote-s3: NOT FOUND (needed for plugin marketplace)"
+}
+
+# Plugin marketplace
+$kmPath = Join-Path $env:APPDATA "claude\plugins\known_marketplaces.json"
+if ((Test-Path $kmPath) -and (Select-String -Path $kmPath -Pattern "albedo-claude-plugin-marketplace" -Quiet)) {
+    Write-Ok "Plugin marketplace: registered"
+} else {
+    Write-Warn "Plugin marketplace: not registered"
+}
+
 Write-Host ""
 Write-Status "Next steps:"
 Write-Host "  1. Close and reopen PowerShell"
 Write-Host "  2. Run: claude"
+Write-Host "  3. Run /plugin inside Claude Code to browse the Albedo marketplace"
 Write-Host ""
 Write-Warn "You may need to restart your terminal for PATH changes to take effect."
 Write-Host ""
