@@ -1,0 +1,81 @@
+$ErrorActionPreference = "Stop"
+
+$MarketplaceKey = "albedo-claude-plugin-marketplace"
+$KnownMarketplaces = Join-Path $env:APPDATA "claude\plugins\known_marketplaces.json"
+
+Write-Host "Setting up Albedo plugin marketplace for Claude Code..."
+
+# Get account ID from AWS config or prompt
+$awsConfig = Join-Path $env:USERPROFILE ".aws\config"
+$accountId = $null
+if (Test-Path $awsConfig) {
+    $content = Get-Content $awsConfig -Raw
+    if ($content -match "(?s)\[profile prod-it01-bedrock\].*?sso_account_id\s*=\s*(\d+)") {
+        $accountId = $Matches[1]
+    }
+}
+if (-not $accountId) {
+    Write-Host "AWS Account ID not found in ~/.aws/config."
+    Write-Host "Find it at: https://albedo.awsapps.com/start -> Account list"
+    $accountId = Read-Host "Enter your AWS Account ID"
+    if (-not $accountId -or $accountId -notmatch '^\d+$') {
+        Write-Error "Invalid account ID."
+        exit 1
+    }
+}
+
+$MarketplaceUrl = "s3://plugin-marketplace-prod-it01-$accountId/marketplace"
+
+# Install git-remote-s3
+if (-not (Get-Command git-remote-s3 -ErrorAction SilentlyContinue)) {
+    Write-Host "Installing git-remote-s3..."
+    if (Get-Command uv -ErrorAction SilentlyContinue) {
+        uv tool install git-remote-s3
+    } elseif (Get-Command pipx -ErrorAction SilentlyContinue) {
+        pipx install git-remote-s3
+    } elseif (Get-Command pip -ErrorAction SilentlyContinue) {
+        pip install git-remote-s3
+    } else {
+        Write-Error "No supported package manager found (uv, pipx, or pip). Install git-remote-s3 manually: pipx install git-remote-s3"
+        exit 1
+    }
+} else {
+    Write-Host "git-remote-s3 already installed."
+}
+
+# Validate AWS credentials and S3 bucket access
+Write-Host "Validating marketplace access..."
+$bucketUrl = $MarketplaceUrl.Substring(0, $MarketplaceUrl.LastIndexOf('/') + 1)
+aws s3 ls $bucketUrl --profile prod-it01-bedrock 2>&1 | Out-Null
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "Marketplace bucket accessible."
+} else {
+    Write-Host "Warning: Could not access marketplace bucket." -ForegroundColor Yellow
+    Write-Host "Ensure you have valid AWS credentials: aws sso login --profile prod-it01-bedrock" -ForegroundColor Yellow
+    Write-Host "The marketplace will be registered but won't sync until credentials are available." -ForegroundColor Yellow
+}
+
+# Register marketplace in known_marketplaces.json
+$PluginDir = Split-Path $KnownMarketplaces
+if (-not (Test-Path $PluginDir)) {
+    New-Item -ItemType Directory -Path $PluginDir -Force | Out-Null
+}
+
+$Entry = @{
+    source = @{ source = "git"; url = $MarketplaceUrl }
+    installLocation = Join-Path $env:APPDATA "claude\plugins\marketplaces\$MarketplaceKey"
+    lastUpdated = "1970-01-01T00:00:00.000Z"
+}
+
+if (Test-Path $KnownMarketplaces) {
+    $Data = Get-Content $KnownMarketplaces -Raw | ConvertFrom-Json -AsHashtable
+    $Data[$MarketplaceKey] = $Entry
+} else {
+    $Data = @{ $MarketplaceKey = $Entry }
+}
+
+$Data | ConvertTo-Json -Depth 4 | Set-Content $KnownMarketplaces -Encoding UTF8
+
+Write-Host ""
+Write-Host "Done! The Albedo plugin marketplace is now registered."
+Write-Host "Open Claude Code and run /plugin to browse and install plugins."

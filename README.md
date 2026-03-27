@@ -75,6 +75,21 @@ powershell -ExecutionPolicy Bypass -File setup_ccb.ps1
 - AWS SSO access to Albedo's prod-it01 account
 - AlbedoBedrockUsers role permissions
 
+## Plugin Marketplace (Existing Users)
+
+Already have Claude Code set up? Add the Albedo plugin marketplace:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/Albedo-Space-Corp/claude_code/refs/heads/main/setup-s3-marketplace.sh)
+```
+
+**Windows:**
+```powershell
+irm https://raw.githubusercontent.com/Albedo-Space-Corp/claude_code/refs/heads/main/setup-s3-marketplace.ps1 | iex
+```
+
+Then open Claude Code and run `/plugin` → **Update marketplace** to sync plugins.
+
 ## Documentation
 
 See [CLAUDE.md](.claude/CLAUDE.md) for complete documentation including:

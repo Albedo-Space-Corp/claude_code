@@ -346,9 +346,11 @@ if (-not (Test-Path $PluginDir)) {
     New-Item -ItemType Directory -Path $PluginDir -Force | Out-Null
 }
 
+$InstallLocation = Join-Path $env:APPDATA "claude\plugins\marketplaces\$MarketplaceKey"
+
 $Entry = @{
     source = @{ source = "git"; url = $MarketplaceUrl }
-    installLocation = Join-Path $env:APPDATA "claude\plugins\marketplaces\$MarketplaceKey"
+    installLocation = $InstallLocation
     lastUpdated = "1970-01-01T00:00:00.000Z"
 }
 
