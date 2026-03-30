@@ -97,6 +97,13 @@ $Entry = @{
     lastUpdated = "1970-01-01T00:00:00.000Z"
 }
 
+# Official Claude marketplace — ensure it's always present
+$OfficialEntry = @{
+    source = @{ source = "github"; repo = "anthropics/claude-plugins-official" }
+    installLocation = Join-Path $env:USERPROFILE ".claude\plugins\marketplaces\claude-plugins-official"
+    lastUpdated = "1970-01-01T00:00:00.000Z"
+}
+
 if (Test-Path $KnownMarketplaces) {
     try {
         $existing = Get-Content $KnownMarketplaces -Raw | ConvertFrom-Json
@@ -108,10 +115,14 @@ if (Test-Path $KnownMarketplaces) {
     } catch {
         $Data = @{}
     }
-    $Data[$MarketplaceKey] = $Entry
 } else {
-    $Data = @{ $MarketplaceKey = $Entry }
+    $Data = @{}
 }
+
+if (-not $Data.ContainsKey("claude-plugins-official")) {
+    $Data["claude-plugins-official"] = $OfficialEntry
+}
+$Data[$MarketplaceKey] = $Entry
 
 $jsonStr = $Data | ConvertTo-Json -Depth 4
 [System.IO.File]::WriteAllText($KnownMarketplaces, $jsonStr, [System.Text.UTF8Encoding]::new($false))

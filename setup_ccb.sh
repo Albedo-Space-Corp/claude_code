@@ -379,18 +379,25 @@ fi
 # Register marketplace in known_marketplaces.json
 mkdir -p "$HOME/.claude/plugins"
 
+OFFICIAL_KEY="claude-plugins-official"
+OFFICIAL_LOC="$HOME/.claude/plugins/marketplaces/$OFFICIAL_KEY"
+
 if [ -f "$KNOWN_MARKETPLACES" ]; then
     jq --arg key "$MARKETPLACE_KEY" \
        --arg url "$MARKETPLACE_URL" \
        --arg loc "$HOME/.claude/plugins/marketplaces/$MARKETPLACE_KEY" \
-       '.[$key] = {source: {source: "git", url: $url}, installLocation: $loc, lastUpdated: "1970-01-01T00:00:00.000Z"}' \
+       --arg okey "$OFFICIAL_KEY" \
+       --arg oloc "$OFFICIAL_LOC" \
+       '.[$key] = {source: {source: "git", url: $url}, installLocation: $loc, lastUpdated: "1970-01-01T00:00:00.000Z"} | if has($okey) then . else .[$okey] = {source: {source: "github", repo: "anthropics/claude-plugins-official"}, installLocation: $oloc, lastUpdated: "1970-01-01T00:00:00.000Z"} end' \
        "$KNOWN_MARKETPLACES" > /tmp/known_marketplaces_tmp.json
     mv /tmp/known_marketplaces_tmp.json "$KNOWN_MARKETPLACES"
 else
     jq -n --arg key "$MARKETPLACE_KEY" \
           --arg url "$MARKETPLACE_URL" \
           --arg loc "$HOME/.claude/plugins/marketplaces/$MARKETPLACE_KEY" \
-          '{($key): {source: {source: "git", url: $url}, installLocation: $loc, lastUpdated: "1970-01-01T00:00:00.000Z"}}' \
+          --arg okey "$OFFICIAL_KEY" \
+          --arg oloc "$OFFICIAL_LOC" \
+          '{($okey): {source: {source: "github", repo: "anthropics/claude-plugins-official"}, installLocation: $oloc, lastUpdated: "1970-01-01T00:00:00.000Z"}, ($key): {source: {source: "git", url: $url}, installLocation: $loc, lastUpdated: "1970-01-01T00:00:00.000Z"}}' \
           > "$KNOWN_MARKETPLACES"
 fi
 

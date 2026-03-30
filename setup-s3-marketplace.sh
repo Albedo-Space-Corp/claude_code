@@ -62,6 +62,13 @@ if os.path.isfile(path):
     with open(path) as f:
         data = json.load(f)
 
+if 'claude-plugins-official' not in data:
+    data['claude-plugins-official'] = {
+        'source': {'source': 'github', 'repo': 'anthropics/claude-plugins-official'},
+        'installLocation': '$HOME/.claude/plugins/marketplaces/claude-plugins-official',
+        'lastUpdated': '1970-01-01T00:00:00.000Z'
+    }
+
 data['$MARKETPLACE_KEY'] = {
     'source': {'source': 'git', 'url': '$MARKETPLACE_URL'},
     'installLocation': '$HOME/.claude/plugins/marketplaces/$MARKETPLACE_KEY',
