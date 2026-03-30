@@ -305,6 +305,13 @@ $MarketplaceUrl = "s3://plugin-marketplace-prod-it01-$accountId/marketplace"
 $MarketplaceKey = "albedo-claude-plugin-marketplace"
 $KnownMarketplaces = Join-Path $env:APPDATA "claude\plugins\known_marketplaces.json"
 
+# Ensure uv is available (needed for git-remote-s3)
+if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+    Write-Status "Installing uv (Python package manager)..."
+    irm https://astral.sh/uv/install.ps1 | iex
+    Refresh-Path
+}
+
 # Install git-remote-s3
 if (Get-Command git-remote-s3 -ErrorAction SilentlyContinue) {
     Write-Ok "git-remote-s3 already installed"
@@ -317,7 +324,7 @@ if (Get-Command git-remote-s3 -ErrorAction SilentlyContinue) {
     } elseif (Get-Command pip -ErrorAction SilentlyContinue) {
         pip install git-remote-s3
     } else {
-        Write-Warn "No Python package manager found. Install git-remote-s3 manually: pip install git-remote-s3"
+        Write-Warn "Could not install git-remote-s3. Install manually: uv tool install git-remote-s3"
     }
 
     Refresh-Path
@@ -353,7 +360,12 @@ $Entry = @{
 
 if (Test-Path $KnownMarketplaces) {
     try {
-        $Data = Get-Content $KnownMarketplaces -Raw | ConvertFrom-Json -AsHashtable
+        $existing = Get-Content $KnownMarketplaces -Raw | ConvertFrom-Json
+        # Build hashtable from PSCustomObject (PS 5.1 compat — no -AsHashtable)
+        $Data = @{}
+        foreach ($prop in $existing.PSObject.Properties) {
+            $Data[$prop.Name] = $prop.Value
+        }
     } catch {
         $Data = @{}
     }
