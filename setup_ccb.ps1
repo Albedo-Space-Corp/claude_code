@@ -305,11 +305,31 @@ $MarketplaceUrl = "s3://plugin-marketplace-prod-it01-$accountId/marketplace"
 $MarketplaceKey = "albedo-claude-plugin-marketplace"
 $KnownMarketplaces = Join-Path $env:APPDATA "claude\plugins\known_marketplaces.json"
 
+# Resolve uv binary — check PATH, then known install locations
+function Find-Uv {
+    $cmd = Get-Command uv -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+    # uv installs to $HOME\.local\bin on Windows by default
+    $candidate = Join-Path $env:USERPROFILE ".local\bin\uv.exe"
+    if (Test-Path $candidate) { return $candidate }
+    # Older uv versions used cargo bin
+    $candidate = Join-Path $env:USERPROFILE ".cargo\bin\uv.exe"
+    if (Test-Path $candidate) { return $candidate }
+    return $null
+}
+
 # Ensure uv is available (needed for git-remote-s3)
-if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+$uvBin = Find-Uv
+if (-not $uvBin) {
     Write-Status "Installing uv (Python package manager)..."
     irm https://astral.sh/uv/install.ps1 | iex
     Refresh-Path
+    $uvBin = Find-Uv
+    if ($uvBin) {
+        Write-Ok "uv installed at $uvBin"
+    } else {
+        Write-Warn "uv install may have failed. Continuing..."
+    }
 }
 
 # Install git-remote-s3
@@ -317,8 +337,8 @@ if (Get-Command git-remote-s3 -ErrorAction SilentlyContinue) {
     Write-Ok "git-remote-s3 already installed"
 } else {
     Write-Status "Installing git-remote-s3..."
-    if (Get-Command uv -ErrorAction SilentlyContinue) {
-        uv tool install git-remote-s3
+    if ($uvBin) {
+        & $uvBin tool install git-remote-s3
     } elseif (Get-Command pipx -ErrorAction SilentlyContinue) {
         pipx install git-remote-s3
     } elseif (Get-Command pip -ErrorAction SilentlyContinue) {
