@@ -382,13 +382,16 @@ mkdir -p "$HOME/.claude/plugins"
 OFFICIAL_KEY="claude-plugins-official"
 OFFICIAL_LOC="$HOME/.claude/plugins/marketplaces/$OFFICIAL_KEY"
 
+NOW=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
+
 if [ -f "$KNOWN_MARKETPLACES" ]; then
     jq --arg key "$MARKETPLACE_KEY" \
        --arg url "$MARKETPLACE_URL" \
        --arg loc "$HOME/.claude/plugins/marketplaces/$MARKETPLACE_KEY" \
        --arg okey "$OFFICIAL_KEY" \
        --arg oloc "$OFFICIAL_LOC" \
-       '.[$key] = {source: {source: "git", url: $url}, installLocation: $loc, lastUpdated: "1970-01-01T00:00:00.000Z"} | if has($okey) then . else .[$okey] = {source: {source: "github", repo: "anthropics/claude-plugins-official"}, installLocation: $oloc, lastUpdated: "1970-01-01T00:00:00.000Z"} end' \
+       --arg now "$NOW" \
+       '.[$key] = {source: {source: "git", url: $url}, installLocation: $loc, lastUpdated: $now} | if has($okey) then . else .[$okey] = {source: {source: "github", repo: "anthropics/claude-plugins-official"}, installLocation: $oloc, lastUpdated: $now} end' \
        "$KNOWN_MARKETPLACES" > /tmp/known_marketplaces_tmp.json
     mv /tmp/known_marketplaces_tmp.json "$KNOWN_MARKETPLACES"
 else
@@ -397,7 +400,8 @@ else
           --arg loc "$HOME/.claude/plugins/marketplaces/$MARKETPLACE_KEY" \
           --arg okey "$OFFICIAL_KEY" \
           --arg oloc "$OFFICIAL_LOC" \
-          '{($okey): {source: {source: "github", repo: "anthropics/claude-plugins-official"}, installLocation: $oloc, lastUpdated: "1970-01-01T00:00:00.000Z"}, ($key): {source: {source: "git", url: $url}, installLocation: $loc, lastUpdated: "1970-01-01T00:00:00.000Z"}}' \
+          --arg now "$NOW" \
+          '{($okey): {source: {source: "github", repo: "anthropics/claude-plugins-official"}, installLocation: $oloc, lastUpdated: $now}, ($key): {source: {source: "git", url: $url}, installLocation: $loc, lastUpdated: $now}}' \
           > "$KNOWN_MARKETPLACES"
 fi
 

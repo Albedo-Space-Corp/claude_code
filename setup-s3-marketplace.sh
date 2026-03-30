@@ -55,6 +55,7 @@ mkdir -p "$(dirname "$KNOWN_MARKETPLACES")"
 
 python3 -c "
 import json, os
+from datetime import datetime, timezone
 
 path = '$KNOWN_MARKETPLACES'
 data = {}
@@ -66,13 +67,13 @@ if 'claude-plugins-official' not in data:
     data['claude-plugins-official'] = {
         'source': {'source': 'github', 'repo': 'anthropics/claude-plugins-official'},
         'installLocation': '$HOME/.claude/plugins/marketplaces/claude-plugins-official',
-        'lastUpdated': '1970-01-01T00:00:00.000Z'
+        'lastUpdated': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.000Z')
     }
 
 data['$MARKETPLACE_KEY'] = {
     'source': {'source': 'git', 'url': '$MARKETPLACE_URL'},
     'installLocation': '$HOME/.claude/plugins/marketplaces/$MARKETPLACE_KEY',
-    'lastUpdated': '1970-01-01T00:00:00.000Z'
+    'lastUpdated': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.000Z')
 }
 
 with open(path, 'w') as f:

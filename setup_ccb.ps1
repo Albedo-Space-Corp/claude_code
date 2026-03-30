@@ -375,14 +375,14 @@ $InstallLocation = Join-Path $env:USERPROFILE ".claude\plugins\marketplaces\$Mar
 $Entry = @{
     source = @{ source = "git"; url = $MarketplaceUrl }
     installLocation = $InstallLocation
-    lastUpdated = "1970-01-01T00:00:00.000Z"
+    lastUpdated = ((Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ"))
 }
 
 # Official Claude marketplace — ensure it's always present
 $OfficialEntry = @{
     source = @{ source = "github"; repo = "anthropics/claude-plugins-official" }
     installLocation = Join-Path $env:USERPROFILE ".claude\plugins\marketplaces\claude-plugins-official"
-    lastUpdated = "1970-01-01T00:00:00.000Z"
+    lastUpdated = ((Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ"))
 }
 
 if (Test-Path $KnownMarketplaces) {
