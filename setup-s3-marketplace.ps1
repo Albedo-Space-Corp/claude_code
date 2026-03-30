@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Stop"
 
 $MarketplaceKey = "albedo-claude-plugin-marketplace"
-$KnownMarketplaces = Join-Path $env:APPDATA "claude\plugins\known_marketplaces.json"
+$KnownMarketplaces = Join-Path $env:USERPROFILE ".claude\plugins\known_marketplaces.json"
 
 Write-Host "Setting up Albedo plugin marketplace for Claude Code..."
 
@@ -93,7 +93,7 @@ if (-not (Test-Path $PluginDir)) {
 
 $Entry = @{
     source = @{ source = "git"; url = $MarketplaceUrl }
-    installLocation = Join-Path $env:APPDATA "claude\plugins\marketplaces\$MarketplaceKey"
+    installLocation = Join-Path $env:USERPROFILE ".claude\plugins\marketplaces\$MarketplaceKey"
     lastUpdated = "1970-01-01T00:00:00.000Z"
 }
 

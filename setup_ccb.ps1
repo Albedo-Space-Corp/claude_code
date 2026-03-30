@@ -303,7 +303,7 @@ Write-Status "Setting up Albedo plugin marketplace..."
 
 $MarketplaceUrl = "s3://plugin-marketplace-prod-it01-$accountId/marketplace"
 $MarketplaceKey = "albedo-claude-plugin-marketplace"
-$KnownMarketplaces = Join-Path $env:APPDATA "claude\plugins\known_marketplaces.json"
+$KnownMarketplaces = Join-Path $env:USERPROFILE ".claude\plugins\known_marketplaces.json"
 
 # Resolve uv binary — check PATH, then known install locations
 function Find-Uv {
@@ -370,7 +370,7 @@ if (-not (Test-Path $PluginDir)) {
     New-Item -ItemType Directory -Path $PluginDir -Force | Out-Null
 }
 
-$InstallLocation = Join-Path $env:APPDATA "claude\plugins\marketplaces\$MarketplaceKey"
+$InstallLocation = Join-Path $env:USERPROFILE ".claude\plugins\marketplaces\$MarketplaceKey"
 
 $Entry = @{
     source = @{ source = "git"; url = $MarketplaceUrl }
@@ -458,7 +458,7 @@ if (Get-Command git-remote-s3 -ErrorAction SilentlyContinue) {
 }
 
 # Plugin marketplace
-$kmPath = Join-Path $env:APPDATA "claude\plugins\known_marketplaces.json"
+$kmPath = Join-Path $env:USERPROFILE ".claude\plugins\known_marketplaces.json"
 if ((Test-Path $kmPath) -and (Select-String -Path $kmPath -Pattern "albedo-claude-plugin-marketplace" -Quiet)) {
     Write-Ok "Plugin marketplace: registered"
 } else {
