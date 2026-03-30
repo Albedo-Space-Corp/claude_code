@@ -65,8 +65,10 @@ claude --model haiku     # Haiku 4.5 for everything
 
 ### Windows
 
+Download and run the setup script:
 ```powershell
-powershell -ExecutionPolicy Bypass -File setup_ccb.ps1
+Invoke-WebRequest https://raw.githubusercontent.com/Albedo-Space-Corp/claude_code/refs/heads/main/setup_ccb.ps1 -OutFile "$HOME\Downloads\setup_ccb.ps1"
+powershell -ExecutionPolicy Bypass -File "$HOME\Downloads\setup_ccb.ps1"
 ```
 
 ## Requirements

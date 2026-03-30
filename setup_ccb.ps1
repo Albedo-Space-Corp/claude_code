@@ -146,10 +146,7 @@ if (Get-Command claude -ErrorAction SilentlyContinue) {
     Write-Ok "Claude Code already installed at $claudeExe"
 } else {
     Write-Status "Installing Claude Code (native installer - enables auto-updates)..."
-    $installerPath = Join-Path $env:TEMP "claude_install.ps1"
-    Invoke-WebRequest -Uri "https://claude.ai/install.ps1" -OutFile $installerPath -UseBasicParsing
-    & $installerPath
-    Remove-Item $installerPath -ErrorAction SilentlyContinue
+    irm https://claude.ai/install.ps1 | iex
 }
 
 # Ensure ~/.local/bin is in the user's persistent PATH
