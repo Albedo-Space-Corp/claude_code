@@ -113,7 +113,8 @@ if (Test-Path $KnownMarketplaces) {
     $Data = @{ $MarketplaceKey = $Entry }
 }
 
-$Data | ConvertTo-Json -Depth 4 | Set-Content $KnownMarketplaces -Encoding UTF8
+$jsonStr = $Data | ConvertTo-Json -Depth 4
+[System.IO.File]::WriteAllText($KnownMarketplaces, $jsonStr, [System.Text.UTF8Encoding]::new($false))
 
 Write-Host ""
 Write-Host "Done! The Albedo plugin marketplace is now registered."
