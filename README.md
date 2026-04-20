@@ -20,28 +20,26 @@ claude                # Launch Claude Code
 /plugin               # Browse the Albedo plugin marketplace
 ```
 
-## Update to v5.0.0 (Existing Users)
+## Migrate Existing Setup (v5.0.0 → v5.2.0)
+
+If you ran setup before ~April 2026, you likely have pinned model ARN env vars in your `~/.claude/settings.json`. These limit the `/model` picker to just Opus/Sonnet/Haiku at whatever versions were pinned. Run:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/Albedo-Space-Corp/claude_code/refs/heads/main/update_claude_code.sh)
 ```
 
-This updates your `~/.claude/settings.json` with the latest model ARNs while preserving your hooks and plugins.
+This removes the pinned ARNs so Claude Code's native `/model` picker shows the full Bedrock model list (including 1M context variants). Your hooks, plugins, and other settings are preserved.
 
 **Note:** The `claude_bedrock.sh` wrapper still works if you prefer it.
 
-## What's New in v5.0.0
+## What's New in v5.2.0
 
-**Performance:** Eliminates ~2-3 second Bedrock query overhead on every launch by using hardcoded inference profile ARNs.
+**Native model picker:** Removed pinned model ARNs. Claude Code's built-in `/model` picker now controls model selection, exposing all available Bedrock models (including 1M context variants).
 
-**Stability:** Pins model versions
-
-**Current Models:**
-- Opus 4.6
-- Sonnet 4.6
-- Haiku 4.5
-
-**Migration:** Configuration moved from wrapper script to `settings.json`. Just run `update_claude_code.sh` to migrate.
+**Why this is better:**
+- New models (e.g., Opus 4.8) appear automatically when Claude Code updates — no more `update_claude_code.sh` runs for model changes
+- 1M context variants are now selectable via the picker
+- Smaller `settings.json` — no account ID substitution, no model ARNs to maintain
 
 ## Usage
 
@@ -53,7 +51,7 @@ claude
 claude --resume
 
 # Launch with specific model
-claude --model opus      # Opus 4.6 for everything
+claude --model opus      # Opus 4.7 for everything
 claude --model sonnet    # Sonnet 4.6 for everything
 claude --model haiku     # Haiku 4.5 for everything
 

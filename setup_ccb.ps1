@@ -238,9 +238,22 @@ if (-not (Test-Path $claudeDir)) {
 
 Write-Status "Downloading latest configuration from GitHub..."
 $referenceRaw = (Invoke-WebRequest -Uri $ReferenceUrl -UseBasicParsing).Content
-$referenceRaw = $referenceRaw.Replace("YOUR_ACCOUNT_ID", $accountId)
-$referenceObj  = $referenceRaw | ConvertFrom-Json
+$referenceObj = $referenceRaw | ConvertFrom-Json
 Write-Ok "Downloaded reference configuration"
+
+# Pinned model ARN env vars to remove from existing settings (legacy from v5.0.0)
+# Claude Code's native /model picker handles model selection now.
+$PinnedEnvKeys = @(
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL_DESCRIPTION",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL_DESCRIPTION",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL_DESCRIPTION"
+)
 
 if (Test-Path $claudeSettings) {
     Write-Status "Merging with existing settings..."
@@ -263,17 +276,12 @@ if (Test-Path $claudeSettings) {
     }
 
     if ($existing) {
-        # Set model and awsAuthRefresh if not already present
-        if (-not $existing.PSObject.Properties["model"]) {
-            $existing | Add-Member -NotePropertyName "model" -NotePropertyValue $referenceObj.model
-        }
         if (-not $existing.PSObject.Properties["awsAuthRefresh"]) {
             $existing | Add-Member -NotePropertyName "awsAuthRefresh" -NotePropertyValue $referenceObj.awsAuthRefresh
         }
 
         # Merge env block: reference values override existing
         if (-not $existing.PSObject.Properties["env"] -or $existing.env -isnot [PSCustomObject]) {
-            # No env block or env is not an object - replace entirely
             if ($existing.PSObject.Properties["env"]) {
                 $existing.env = $referenceObj.env
             } else {
@@ -285,6 +293,13 @@ if (Test-Path $claudeSettings) {
                     $existing.env.($prop.Name) = $prop.Value
                 } else {
                     $existing.env | Add-Member -NotePropertyName $prop.Name -NotePropertyValue $prop.Value
+                }
+            }
+
+            # Strip any legacy pinned model ARN env vars
+            foreach ($key in $PinnedEnvKeys) {
+                if ($existing.env.PSObject.Properties[$key]) {
+                    $existing.env.PSObject.Properties.Remove($key)
                 }
             }
         }

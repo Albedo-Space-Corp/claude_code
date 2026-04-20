@@ -206,7 +206,6 @@ print_status "Configuring Claude Code for Bedrock..."
 if ! REFERENCE=$(curl -fsSL "$REFERENCE_URL"); then
     print_warning "Failed to download settings.json.reference — skipping Bedrock config"
 else
-    REFERENCE=$(echo "$REFERENCE" | sed "s/YOUR_ACCOUNT_ID/$ACCOUNT_ID/g")
     mkdir -p ~/.claude
     CLAUDE_SETTINGS="$HOME/.claude/settings.json"
 
@@ -219,15 +218,23 @@ else
         print_warning "Existing settings backed up to $BACKUP_FILE"
 
         REF_ENV=$(echo "$REFERENCE" | jq '.env')
-        REF_MODEL=$(echo "$REFERENCE" | jq -r '.model')
         REF_AUTH=$(echo "$REFERENCE" | jq -r '.awsAuthRefresh')
 
+        # Merge reference env + awsAuthRefresh, and strip any pinned model ARNs
+        # from older versions so Claude Code's native /model picker takes over.
         jq --argjson new_env "$REF_ENV" \
-           --arg new_model "$REF_MODEL" \
            --arg new_auth "$REF_AUTH" '
-          .model //= $new_model |
           .awsAuthRefresh //= $new_auth |
-          .env = (.env // {}) + $new_env
+          .env = (.env // {}) + $new_env |
+          del(.env.ANTHROPIC_DEFAULT_OPUS_MODEL,
+              .env.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME,
+              .env.ANTHROPIC_DEFAULT_OPUS_MODEL_DESCRIPTION,
+              .env.ANTHROPIC_DEFAULT_SONNET_MODEL,
+              .env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME,
+              .env.ANTHROPIC_DEFAULT_SONNET_MODEL_DESCRIPTION,
+              .env.ANTHROPIC_DEFAULT_HAIKU_MODEL,
+              .env.ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME,
+              .env.ANTHROPIC_DEFAULT_HAIKU_MODEL_DESCRIPTION)
         ' "$CLAUDE_SETTINGS" > /tmp/claude_settings_merged.json
 
         mv /tmp/claude_settings_merged.json "$CLAUDE_SETTINGS"
