@@ -55,16 +55,34 @@ if ($confirm -notin @('y', 'Y')) {
     exit 1
 }
 
-# Prompt for AWS Account ID
+# AWS Account ID — try reading from existing profile first, otherwise prompt
 Write-Host ""
-Write-Status "AWS Account ID is required for configuration."
-Write-Status "Find it at: https://albedo.awsapps.com/start -> Account list"
-$accountId = Read-Host "Enter your AWS Account ID"
-if (-not $accountId -or $accountId -notmatch '^\d+$') {
-    Write-Err "Invalid account ID. Must be a numeric value."
-    exit 1
+$awsConfigProbe = Join-Path $env:USERPROFILE ".aws\config"
+$accountId = $null
+if (Test-Path $awsConfigProbe) {
+    $configContent = Get-Content $awsConfigProbe -Raw -ErrorAction SilentlyContinue
+    if ($configContent) {
+        # Find the [profile prod-it01-bedrock] block and extract sso_account_id from within it
+        $match = [regex]::Match($configContent, '(?ms)^\[profile prod-it01-bedrock\](.*?)(?=^\[|\z)')
+        if ($match.Success) {
+            $idMatch = [regex]::Match($match.Groups[1].Value, 'sso_account_id\s*=\s*(\d+)')
+            if ($idMatch.Success) {
+                $accountId = $idMatch.Groups[1].Value
+                Write-Ok "Using AWS Account ID from existing profile: $accountId"
+            }
+        }
+    }
 }
-Write-Ok "Using AWS Account ID: $accountId"
+if (-not $accountId) {
+    Write-Status "AWS Account ID is required for configuration."
+    Write-Status "Find it at: https://albedo.awsapps.com/start -> Account list"
+    $accountId = Read-Host "Enter your AWS Account ID"
+    if (-not $accountId -or $accountId -notmatch '^\d+$') {
+        Write-Err "Invalid account ID. Must be a numeric value."
+        exit 1
+    }
+    Write-Ok "Using AWS Account ID: $accountId"
+}
 
 # ── Check winget ─────────────────────────────────────────────────────
 Write-Status "Checking for winget..."
