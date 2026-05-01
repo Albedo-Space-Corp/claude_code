@@ -191,7 +191,7 @@ if command_exists claude; then
     print_success "Claude Code already installed"
 else
     print_status "Installing Claude Code..."
-    curl -fsSL https://claude.ai/install.sh | sh
+    curl -fsSL https://claude.ai/install.sh | bash
 
     if ! grep -q '\.local/bin' "$SHELL_RC" 2>/dev/null; then
         echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$SHELL_RC"
