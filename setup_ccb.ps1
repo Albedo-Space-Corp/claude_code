@@ -100,7 +100,11 @@ if (Get-Command git -ErrorAction SilentlyContinue) {
     Write-Ok "Git already installed ($(git --version))"
 } else {
     Write-Status "Installing Git for Windows via winget..."
-    winget install Git.Git --accept-package-agreements --accept-source-agreements --silent
+    # --source winget: skip the msstore source. On fresh/un-updated Windows the
+    # bundled winget client has a stale pinned cert chain, so searching msstore
+    # fails with 0x8a15005e (-1978335138) and aborts the whole install even though
+    # the package lives in the 'winget' source. Scoping the source avoids it.
+    winget install Git.Git --source winget --accept-package-agreements --accept-source-agreements --silent
     if ($LASTEXITCODE -ne 0) { Write-Warn "winget returned exit code $LASTEXITCODE (may be non-fatal)" }
     Refresh-Path
 
@@ -140,7 +144,9 @@ if (Get-Command aws -ErrorAction SilentlyContinue) {
     Write-Ok "AWS CLI already installed ($(aws --version 2>&1))"
 } else {
     Write-Status "Installing AWS CLI via winget..."
-    winget install Amazon.AWSCLI --accept-package-agreements --accept-source-agreements --silent
+    # --source winget: see Git install above — avoids the msstore cert-pinning
+    # error (0x8a15005e) on fresh Windows that aborts otherwise-valid installs.
+    winget install Amazon.AWSCLI --source winget --accept-package-agreements --accept-source-agreements --silent
     if ($LASTEXITCODE -ne 0) { Write-Warn "winget returned exit code $LASTEXITCODE (may be non-fatal)" }
     Refresh-Path
 
