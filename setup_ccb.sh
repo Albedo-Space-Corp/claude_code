@@ -141,27 +141,68 @@ else
 fi
 
 # ── Step 3: AWS profile ───────────────────────────────────────────────────
-print_status "Configuring AWS profile (prod-it01-bedrock)..."
+# We use the MODERN sso-session format (CLI v2.9+), NOT the legacy inline
+# format. The sso-session block holds an OIDC refresh token, which lets the
+# AWS CLI / Claude Code silently re-mint the access token in the background
+# (up to the IIC "background session" window, currently 7 days) instead of
+# stalling on an interactive browser login mid-session. The profile references
+# the session via `sso_session =`; Claude only knows the profile name, follows
+# that pointer, and gets silent refresh for free. The legacy inline format
+# (sso_start_url etc. directly in the profile) has NO refresh token, so it
+# forces interactive re-auth the moment the ~8h access token expires.
+print_status "Configuring AWS profile (prod-it01-bedrock, sso-session format)..."
 mkdir -p ~/.aws
 
-PROFILE_BLOCK="[profile prod-it01-bedrock]
-region = us-west-2
-output = json
+# Canonical target: one sso-session block + a profile that references it.
+CANONICAL_BLOCK="[sso-session albedo-commercial]
 sso_start_url = https://albedo.awsapps.com/start
 sso_region = us-west-2
+sso_registration_scopes = sso:account:access
+
+[profile prod-it01-bedrock]
+sso_session = albedo-commercial
 sso_account_id = $ACCOUNT_ID
 sso_role_name = AlbedoBedrockUsers
-sso_registration_scopes = sso:account:access"
+region = us-west-2
+output = json"
 
 if [ ! -f ~/.aws/config ]; then
-    echo "$PROFILE_BLOCK" > ~/.aws/config
-    print_success "AWS config created with prod-it01-bedrock profile"
-elif grep -q "\[profile prod-it01-bedrock\]" ~/.aws/config; then
-    print_success "prod-it01-bedrock profile already exists"
+    printf '%s\n' "$CANONICAL_BLOCK" > ~/.aws/config
+    print_success "AWS config created (sso-session + prod-it01-bedrock profile)"
 else
-    printf "\n%s\n" "$PROFILE_BLOCK" >> ~/.aws/config
-    print_success "prod-it01-bedrock profile added to existing config"
+    # Idempotent migration: strip any existing albedo-commercial session and
+    # prod-it01-bedrock profile (legacy OR modern), then prepend the canonical
+    # blocks. Everything else in the file (other profiles, comments) is
+    # preserved verbatim. Back up first.
+    BACKUP=~/.aws/config.bak.$(date +%Y%m%d_%H%M%S)
+    cp ~/.aws/config "$BACKUP"
+
+    REMAINDER=$(awk '
+        /^\[/ {
+            if ($0 ~ /^\[(profile[[:space:]]+prod-it01-bedrock|sso-session[[:space:]]+albedo-commercial)\][[:space:]]*$/) { skip=1; next }
+            skip=0
+        }
+        !skip
+    ' ~/.aws/config)
+
+    {
+        printf '%s\n\n' "$CANONICAL_BLOCK"
+        printf '%s\n' "$REMAINDER"
+    } | cat -s > ~/.aws/config.new
+    mv ~/.aws/config.new ~/.aws/config
+
+    if grep -q "\[profile prod-it01-bedrock\]" "$BACKUP" 2>/dev/null; then
+        print_success "prod-it01-bedrock migrated to sso-session format (backup: $BACKUP)"
+        print_warning "Next 'aws sso login' re-registers the client (one browser prompt); after that, silent refresh."
+    else
+        print_success "sso-session + prod-it01-bedrock profile added (backup: $BACKUP)"
+    fi
 fi
+
+# Clear cached role credentials so the next login mints fresh creds under the
+# new session format. A stale ~/.aws/cli/cache entry would otherwise keep the
+# old short-lived creds alive until they expire on their original schedule.
+rm -f ~/.aws/cli/cache/*.json 2>/dev/null || true
 
 # ── Step 4: Shell environment ──────────────────────────────────────────────
 print_status "Configuring shell environment..."

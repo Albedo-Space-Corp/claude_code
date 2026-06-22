@@ -14,6 +14,45 @@
 set -eo pipefail
 
 CLAUDE_SETTINGS="$HOME/.claude/settings.json"
+AWS_CONFIG="$HOME/.aws/config"
+
+# ── Best-effort: migrate a legacy inline prod-it01-bedrock profile to the
+# modern sso-session format. The canonical migration lives in setup_ccb.sh;
+# this is a convenience so a stray `update` run also fixes auth. Skips quietly
+# if the profile is missing or already modern.
+migrate_aws_config() {
+    [[ -f "$AWS_CONFIG" ]] || return 0
+    grep -q "^\[profile prod-it01-bedrock\]" "$AWS_CONFIG" || return 0
+    # Already modern? (profile references an sso-session) → nothing to do.
+    if awk '/^\[profile prod-it01-bedrock\]/{f=1;next} /^\[/{f=0} f && /^[[:space:]]*sso_session[[:space:]]*=/{found=1} END{exit !found}' "$AWS_CONFIG"; then
+        echo "✓ AWS profile already on sso-session format."
+        return 0
+    fi
+    local acct
+    acct=$(awk '/^\[profile prod-it01-bedrock\]/{f=1;next} /^\[/{f=0} f && /^[[:space:]]*sso_account_id[[:space:]]*=/{print $3; exit}' "$AWS_CONFIG")
+    acct="${acct:-188343044386}"
+    local block="[sso-session albedo-commercial]
+sso_start_url = https://albedo.awsapps.com/start
+sso_region = us-west-2
+sso_registration_scopes = sso:account:access
+
+[profile prod-it01-bedrock]
+sso_session = albedo-commercial
+sso_account_id = $acct
+sso_role_name = AlbedoBedrockUsers
+region = us-west-2
+output = json"
+    local bak="$AWS_CONFIG.bak.$(date +%Y%m%d_%H%M%S)"
+    cp "$AWS_CONFIG" "$bak"
+    local rem
+    rem=$(awk '/^\[/ { if ($0 ~ /^\[(profile[[:space:]]+prod-it01-bedrock|sso-session[[:space:]]+albedo-commercial)\][[:space:]]*$/) { skip=1; next } skip=0 } !skip' "$AWS_CONFIG")
+    { printf '%s\n\n' "$block"; printf '%s\n' "$rem"; } | cat -s > "$AWS_CONFIG.new"
+    mv "$AWS_CONFIG.new" "$AWS_CONFIG"
+    rm -f "$HOME"/.aws/cli/cache/*.json 2>/dev/null || true
+    echo "✓ Migrated prod-it01-bedrock to sso-session format (backup: $bak)"
+    echo "  Next 'aws sso login' = one browser prompt, then silent refresh for ~7 days."
+}
+migrate_aws_config
 
 echo "=============================================================="
 echo "Claude Code Bedrock Migration"

@@ -193,7 +193,12 @@ if (Get-Command claude -ErrorAction SilentlyContinue) {
 }
 
 # ── Step 4: Configure AWS SSO profile ───────────────────────────────
-Write-Status "Configuring AWS SSO profile..."
+# Modern sso-session format (CLI v2.9+), NOT legacy inline. The sso-session
+# block holds an OIDC refresh token so the AWS CLI / Claude Code silently
+# re-mint the access token in the background (up to the IIC background-session
+# window, ~7 days) instead of stalling on an interactive browser login mid-run.
+# Legacy inline profiles have no refresh token and force re-auth at ~8h.
+Write-Status "Configuring AWS SSO profile (sso-session format)..."
 
 $awsDir    = Join-Path $env:USERPROFILE ".aws"
 $awsConfig = Join-Path $awsDir "config"
@@ -202,30 +207,61 @@ if (-not (Test-Path $awsDir)) {
     New-Item -ItemType Directory -Path $awsDir -Force | Out-Null
 }
 
-$profileBlock = @"
-
-[profile prod-it01-bedrock]
-region = us-west-2
-output = json
+# Canonical target: one sso-session block + a profile that references it.
+$canonicalBlock = @"
+[sso-session albedo-commercial]
 sso_start_url = https://albedo.awsapps.com/start
 sso_region = us-west-2
+sso_registration_scopes = sso:account:access
+
+[profile prod-it01-bedrock]
+sso_session = albedo-commercial
 sso_account_id = $accountId
 sso_role_name = AlbedoBedrockUsers
-sso_registration_scopes = sso:account:access
+region = us-west-2
+output = json
 "@
 
 if (Test-Path $awsConfig) {
-    $content = Get-Content $awsConfig -Raw -ErrorAction SilentlyContinue
-    if ($content -and $content.Contains("[profile prod-it01-bedrock]")) {
-        Write-Ok "prod-it01-bedrock profile already exists"
+    # Idempotent migration: back up, strip any existing albedo-commercial
+    # session and prod-it01-bedrock profile (legacy OR modern), then prepend
+    # the canonical blocks. Everything else is preserved verbatim.
+    $backup = "$awsConfig.bak.$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+    Copy-Item $awsConfig $backup
+    $hadProfile = (Get-Content $awsConfig -Raw -ErrorAction SilentlyContinue) -match '\[profile\s+prod-it01-bedrock\]'
+
+    $lines = Get-Content $awsConfig
+    $remainder = New-Object System.Collections.Generic.List[string]
+    $skip = $false
+    foreach ($line in $lines) {
+        if ($line -match '^\s*\[') {
+            if ($line -match '^\s*\[(profile\s+prod-it01-bedrock|sso-session\s+albedo-commercial)\]\s*$') {
+                $skip = $true; continue
+            }
+            $skip = $false
+        }
+        if (-not $skip) { $remainder.Add($line) }
+    }
+
+    $remainderText = ($remainder -join "`n").Trim()
+    $newContent = if ($remainderText) { "$canonicalBlock`n`n$remainderText`n" } else { "$canonicalBlock`n" }
+    Write-Utf8NoBom -Path $awsConfig -Content $newContent
+
+    if ($hadProfile) {
+        Write-Ok "prod-it01-bedrock migrated to sso-session format (backup: $backup)"
+        Write-Warn "Next 'aws sso login' re-registers the client (one browser prompt); after that, silent refresh."
     } else {
-        Add-Content -Path $awsConfig -Value $profileBlock
-        Write-Ok "prod-it01-bedrock profile added to config"
+        Write-Ok "sso-session + prod-it01-bedrock profile added (backup: $backup)"
     }
 } else {
-    Write-Utf8NoBom -Path $awsConfig -Content $profileBlock.TrimStart()
-    Write-Ok "AWS config created with prod-it01-bedrock profile"
+    Write-Utf8NoBom -Path $awsConfig -Content "$canonicalBlock`n"
+    Write-Ok "AWS config created (sso-session + prod-it01-bedrock profile)"
 }
+
+# Clear cached role credentials so the next login mints fresh creds under the
+# new session format (a stale cache entry would keep old short-lived creds).
+$cliCache = Join-Path $awsDir "cli\cache"
+if (Test-Path $cliCache) { Remove-Item "$cliCache\*.json" -Force -ErrorAction SilentlyContinue }
 
 # Disable AWS CLI pager (prevents hanging on long output)
 [Environment]::SetEnvironmentVariable("AWS_PAGER", "", "User")
