@@ -6,18 +6,8 @@ KNOWN_MARKETPLACES="$HOME/.claude/plugins/known_marketplaces.json"
 
 echo "Setting up Albedo plugin marketplace for Claude Code..."
 
-# Get account ID from AWS config or prompt
-ACCOUNT_ID=$(grep -A 10 "\[profile prod-it01-bedrock\]" ~/.aws/config 2>/dev/null | grep "sso_account_id" | awk -F'= ' '{print $2}' | tr -d '[:space:]')
-if [[ -z "$ACCOUNT_ID" || ! "$ACCOUNT_ID" =~ ^[0-9]+$ ]]; then
-  echo "AWS Account ID not found in ~/.aws/config."
-  echo "Find it at: https://albedo.awsapps.com/start → Account list"
-  read -p "Enter your AWS Account ID: " ACCOUNT_ID
-  if [[ -z "$ACCOUNT_ID" || ! "$ACCOUNT_ID" =~ ^[0-9]+$ ]]; then
-    echo "Error: Invalid account ID." >&2
-    exit 1
-  fi
-fi
-
+# prod-it01 (commercial) hosts the plugin marketplace, shared across all Albedo users.
+ACCOUNT_ID="188343044386"
 MARKETPLACE_URL="s3://plugin-marketplace-prod-it01-${ACCOUNT_ID}/marketplace"
 
 # Install git-remote-s3

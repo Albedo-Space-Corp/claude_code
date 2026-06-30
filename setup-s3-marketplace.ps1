@@ -5,25 +5,8 @@ $KnownMarketplaces = Join-Path $env:USERPROFILE ".claude\plugins\known_marketpla
 
 Write-Host "Setting up Albedo plugin marketplace for Claude Code..."
 
-# Get account ID from AWS config or prompt
-$awsConfig = Join-Path $env:USERPROFILE ".aws\config"
-$accountId = $null
-if (Test-Path $awsConfig) {
-    $content = Get-Content $awsConfig -Raw
-    if ($content -match "(?s)\[profile prod-it01-bedrock\].*?sso_account_id\s*=\s*(\d+)") {
-        $accountId = $Matches[1]
-    }
-}
-if (-not $accountId) {
-    Write-Host "AWS Account ID not found in ~/.aws/config."
-    Write-Host "Find it at: https://albedo.awsapps.com/start -> Account list"
-    $accountId = Read-Host "Enter your AWS Account ID"
-    if (-not $accountId -or $accountId -notmatch '^\d+$') {
-        Write-Error "Invalid account ID."
-        exit 1
-    }
-}
-
+# prod-it01 (commercial) hosts the plugin marketplace, shared across all Albedo users.
+$accountId = "188343044386"
 $MarketplaceUrl = "s3://plugin-marketplace-prod-it01-$accountId/marketplace"
 
 # Resolve uv binary — check PATH, then known install locations
