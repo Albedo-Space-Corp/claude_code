@@ -291,24 +291,49 @@ MARKETPLACE_KEY="albedo-claude-plugin-marketplace"
 KNOWN_MARKETPLACES="$HOME/.claude/plugins/known_marketplaces.json"
 
 # Install git-remote-s3
+# pipx/uv install to ~/.local/bin, which isn't always on PATH in non-login
+# shells. Add it now so this script (and the Claude Code launched next) can
+# actually find git-remote-s3. Also persist the PATH edit for future shells.
+export PATH="$HOME/.local/bin:$PATH"
+if [ -f "$SHELL_RC" ] && ! grep -q '\.local/bin' "$SHELL_RC" 2>/dev/null; then
+    echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$SHELL_RC"
+fi
+
 if command_exists git-remote-s3; then
     print_success "git-remote-s3 already installed"
 else
     print_status "Installing git-remote-s3..."
     if command_exists uv; then
-        uv tool install git-remote-s3 2>/dev/null || print_warning "uv tool install failed"
+        uv tool install git-remote-s3 || print_warning "uv tool install failed"
     elif command_exists pipx; then
-        pipx install git-remote-s3 2>/dev/null || print_warning "pipx install failed"
+        pipx install git-remote-s3 || print_warning "pipx install failed"
+        pipx ensurepath >/dev/null 2>&1 || true
     elif [ "$MACHINE" = "Linux" ]; then
-        (sudo apt-get install -y pipx >> /dev/null 2>&1 && pipx install git-remote-s3 2>/dev/null) || print_warning "Could not install git-remote-s3 — install manually: pipx install git-remote-s3"
+        if sudo apt-get install -y pipx >> /dev/null 2>&1; then
+            pipx install git-remote-s3 || print_warning "pipx install failed"
+            pipx ensurepath >/dev/null 2>&1 || true
+        else
+            print_warning "Could not install pipx via apt — install manually: sudo apt install pipx && pipx install git-remote-s3"
+        fi
     elif command_exists brew; then
-        (brew install pipx 2>/dev/null && pipx install git-remote-s3 2>/dev/null) || print_warning "Could not install git-remote-s3 — install manually: pipx install git-remote-s3"
+        if brew install pipx; then
+            pipx install git-remote-s3 || print_warning "pipx install failed"
+            pipx ensurepath >/dev/null 2>&1 || true
+        else
+            print_warning "Could not install pipx via brew — install manually: brew install pipx && pipx install git-remote-s3"
+        fi
     else
-        print_warning "Could not install git-remote-s3 — install manually: pipx install git-remote-s3"
+        print_warning "No package manager available (uv, pipx, brew, apt) — install manually: pipx install git-remote-s3"
     fi
 
+    # Re-check PATH in case pipx just dropped the binary in ~/.local/bin
+    export PATH="$HOME/.local/bin:$PATH"
     if command_exists git-remote-s3; then
         print_success "git-remote-s3 installed"
+    else
+        print_error "git-remote-s3 not found on PATH after install."
+        print_error "The Albedo plugin marketplace will fail to clone until this is fixed."
+        print_error "Try:  pipx install git-remote-s3 && pipx ensurepath  (then restart your terminal)"
     fi
 fi
 

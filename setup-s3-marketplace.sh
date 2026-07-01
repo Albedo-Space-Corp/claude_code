@@ -10,6 +10,22 @@ echo "Setting up Albedo plugin marketplace for Claude Code..."
 ACCOUNT_ID="188343044386"
 MARKETPLACE_URL="s3://plugin-marketplace-prod-it01-${ACCOUNT_ID}/marketplace"
 
+# pipx/uv install to ~/.local/bin, which isn't always on PATH in non-login
+# shells. Add it now so this script (and the Claude Code launched next) can
+# actually find git-remote-s3.
+export PATH="$HOME/.local/bin:$PATH"
+
+# Persist the PATH edit to the user's shell rc for future shells.
+USER_SHELL="$(basename "${SHELL:-bash}")"
+if [ "$USER_SHELL" = "zsh" ]; then
+  SHELL_RC="$HOME/.zshrc"
+else
+  SHELL_RC="$HOME/.bashrc"
+fi
+if [ -f "$SHELL_RC" ] && ! grep -q '\.local/bin' "$SHELL_RC" 2>/dev/null; then
+  echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$SHELL_RC"
+fi
+
 # Install git-remote-s3
 if ! command -v git-remote-s3 &>/dev/null; then
   echo "Installing git-remote-s3..."
@@ -17,15 +33,31 @@ if ! command -v git-remote-s3 &>/dev/null; then
     uv tool install git-remote-s3
   elif command -v pipx &>/dev/null; then
     pipx install git-remote-s3
+    pipx ensurepath >/dev/null 2>&1 || true
+  elif [ "$(uname -s)" = "Linux" ] && command -v apt-get &>/dev/null; then
+    echo "Installing pipx via apt..."
+    sudo apt-get install -y pipx
+    pipx install git-remote-s3
+    pipx ensurepath >/dev/null 2>&1 || true
   elif command -v brew &>/dev/null; then
     echo "Installing pipx via Homebrew..."
     brew install pipx
     pipx install git-remote-s3
+    pipx ensurepath >/dev/null 2>&1 || true
   else
-    echo "Error: No supported package manager found (uv, pipx, or brew)." >&2
+    echo "Error: No supported package manager found (uv, pipx, brew, or apt)." >&2
     echo "Install git-remote-s3 manually: pipx install git-remote-s3" >&2
     exit 1
   fi
+
+  export PATH="$HOME/.local/bin:$PATH"
+  if ! command -v git-remote-s3 &>/dev/null; then
+    echo "Error: git-remote-s3 was installed but is not on PATH." >&2
+    echo "The Albedo plugin marketplace will fail to clone until this is fixed." >&2
+    echo "Try:  pipx install git-remote-s3 && pipx ensurepath  (then restart your terminal)" >&2
+    exit 1
+  fi
+  echo "git-remote-s3 installed."
 else
   echo "git-remote-s3 already installed."
 fi
