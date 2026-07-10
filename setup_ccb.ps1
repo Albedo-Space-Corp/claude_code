@@ -58,6 +58,8 @@ if ($confirm -notin @('y', 'Y')) {
 # AWS Account ID — prod-it01 (commercial) hosts Bedrock + plugin marketplace,
 # shared across all Albedo users. Hardcoded; same value as setup_ccb.sh.
 $accountId = "188343044386"
+# GovCloud account — gc-prod-it01, hosts GovCloud Bedrock.
+$gcAccountId = "479469912381"
 
 # ── Check winget ─────────────────────────────────────────────────────
 Write-Status "Checking for winget..."
@@ -195,6 +197,18 @@ sso_account_id = $accountId
 sso_role_name = AlbedoBedrockUsers
 region = us-west-2
 output = json
+
+[sso-session albedo-gc]
+sso_start_url = https://start.us-gov-home.awsapps.com/directory/albedo-gc
+sso_region = us-gov-west-1
+sso_registration_scopes = sso:account:access
+
+[profile gc-prod-it01-bedrock]
+sso_session = albedo-gc
+sso_account_id = $gcAccountId
+sso_role_name = AlbedoBedrockUsers
+region = us-gov-west-1
+output = json
 "@
 
 if (Test-Path $awsConfig) {
@@ -210,7 +224,7 @@ if (Test-Path $awsConfig) {
     $skip = $false
     foreach ($line in $lines) {
         if ($line -match '^\s*\[') {
-            if ($line -match '^\s*\[(profile\s+prod-it01-bedrock|sso-session\s+albedo-commercial)\]\s*$') {
+            if ($line -match '^\s*\[(profile\s+(prod-it01-bedrock|gc-prod-it01-bedrock)|sso-session\s+(albedo-commercial|albedo-gc))\]\s*$') {
                 $skip = $true; continue
             }
             $skip = $false
@@ -311,7 +325,16 @@ if (Test-Path $claudeSettings) {
     }
 
     if ($existing) {
-        if (-not $existing.PSObject.Properties["awsAuthRefresh"]) {
+        # awsAuthRefresh is force-updated so existing installs pick up the
+        # profile-following form. Warn if replacing a different value — a user
+        # with a custom auth wrapper should know it changed.
+        if ($existing.PSObject.Properties["awsAuthRefresh"]) {
+            $oldAuth = $existing.awsAuthRefresh
+            if ($oldAuth -ne $referenceObj.awsAuthRefresh) {
+                Write-Warn "awsAuthRefresh updated to '$($referenceObj.awsAuthRefresh)' (was: '$oldAuth'); backup at $backupFile"
+            }
+            $existing.awsAuthRefresh = $referenceObj.awsAuthRefresh
+        } else {
             $existing | Add-Member -NotePropertyName "awsAuthRefresh" -NotePropertyValue $referenceObj.awsAuthRefresh
         }
 
@@ -346,6 +369,52 @@ if (Test-Path $claudeSettings) {
 } else {
     Write-Utf8NoBom -Path $claudeSettings -Content $referenceRaw
     Write-Ok "Settings file created"
+}
+
+# ── Step 6b: GovCloud settings + launcher ───────────────────────────
+# Partition MUST be selected via a --settings file: settings.json's env block
+# overrides process env, so setting $env:AWS_REGION in a function is defeated by
+# the commercial region in settings.json (gov model ID -> commercial endpoint ->
+# 400 invalid model). A --settings file layers over the base settings.json
+# (hooks/plugins/statusline inherited) and its env block wins. Model pinned via
+# ANTHROPIC_DEFAULT_OPUS_MODEL + "model":"opus" (a raw gov model string in the
+# "model" field is ignored across files). No Haiku var: no usable Haiku in gov.
+Write-Status "Writing GovCloud settings + claude-gov launcher..."
+
+$govSettings = Join-Path $claudeDir "gov.settings.json"
+$govSettingsContent = @'
+{
+  "awsAuthRefresh": "aws sso login --profile gc-prod-it01-bedrock",
+  "env": {
+    "CLAUDE_CODE_USE_BEDROCK": "1",
+    "AWS_PROFILE": "gc-prod-it01-bedrock",
+    "AWS_REGION": "us-gov-west-1",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "us-gov.anthropic.claude-opus-4-8",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0"
+  },
+  "model": "opus"
+}
+'@
+Write-Utf8NoBom -Path $govSettings -Content $govSettingsContent
+Write-Ok "GovCloud settings written ($govSettings)"
+
+$launcherMarker = "# Claude Code GovCloud launcher"
+$launcherBlock = @'
+
+# Claude Code GovCloud launcher
+function claude-gov {
+    claude --settings "$HOME/.claude/gov.settings.json" @args
+}
+'@
+
+if (-not (Test-Path $PROFILE)) {
+    New-Item -ItemType File -Path $PROFILE -Force | Out-Null
+}
+if (Select-String -Path $PROFILE -Pattern ([regex]::Escape($launcherMarker)) -Quiet) {
+    Write-Ok "claude-gov launcher already present in `$PROFILE"
+} else {
+    Add-Content -Path $PROFILE -Value $launcherBlock
+    Write-Ok "claude-gov launcher added to `$PROFILE"
 }
 
 # ── Step 7: Setup S3 plugin marketplace ───────────────────────────────

@@ -61,6 +61,28 @@ claude --model haiku     # Haiku 4.5 for everything
 /model opusplan
 ```
 
+### Commercial vs GovCloud
+
+Bare `claude` runs against **commercial** Bedrock (`prod-it01-bedrock`, `us-west-2`). To run
+against **GovCloud** Bedrock, setup installs a `claude-gov` launcher:
+
+```bash
+claude          # Commercial Bedrock (default)
+claude-gov      # GovCloud Bedrock (gc-prod-it01-bedrock, us-gov-west-1)
+```
+
+`claude-gov` is `claude --settings ~/.claude/gov.settings.json` — a small settings file that
+layers over your normal config (hooks, plugins, and statusline all carry over) and switches
+the AWS profile, region, and models to GovCloud. It composes with flags: `claude-gov --resume`.
+
+GovCloud has a smaller catalog (Opus 4.8 and Sonnet 4.5); the gov settings file pins the
+correct `us-gov.` inference profiles for you, because Claude Code's `/model` picker otherwise
+resolves to commercial-only IDs. Background tasks run on your primary model (there is no
+Haiku tier in GovCloud yet).
+
+> GovCloud access requires the `AlbedoBedrockUsers` role in the GovCloud account. If
+> `claude-gov` fails at login, that role may not be provisioned yet — contact #it-help.
+
 ### Windows
 
 Download and run the setup script:

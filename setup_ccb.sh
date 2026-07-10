@@ -28,6 +28,7 @@ fi
 
 # ── Configuration ───────────────────────────────────────────────────────────
 ACCOUNT_ID="188343044386"  # prod-it01 (commercial) — hosts Bedrock + plugin marketplace
+GC_ACCOUNT_ID="479469912381"  # gc-prod-it01 (GovCloud) — hosts GovCloud Bedrock
 REFERENCE_URL="https://raw.githubusercontent.com/Albedo-Space-Corp/claude_code/refs/heads/main/settings.json.reference"
 # ────────────────────────────────────────────────────────────────────────────
 
@@ -164,6 +165,18 @@ sso_session = albedo-commercial
 sso_account_id = $ACCOUNT_ID
 sso_role_name = AlbedoBedrockUsers
 region = us-west-2
+output = json
+
+[sso-session albedo-gc]
+sso_start_url = https://start.us-gov-home.awsapps.com/directory/albedo-gc
+sso_region = us-gov-west-1
+sso_registration_scopes = sso:account:access
+
+[profile gc-prod-it01-bedrock]
+sso_session = albedo-gc
+sso_account_id = $GC_ACCOUNT_ID
+sso_role_name = AlbedoBedrockUsers
+region = us-gov-west-1
 output = json"
 
 if [ ! -f ~/.aws/config ]; then
@@ -179,7 +192,7 @@ else
 
     REMAINDER=$(awk '
         /^\[/ {
-            if ($0 ~ /^\[(profile[[:space:]]+prod-it01-bedrock|sso-session[[:space:]]+albedo-commercial)\][[:space:]]*$/) { skip=1; next }
+            if ($0 ~ /^\[(profile[[:space:]]+(prod-it01-bedrock|gc-prod-it01-bedrock)|sso-session[[:space:]]+(albedo-commercial|albedo-gc))\][[:space:]]*$/) { skip=1; next }
             skip=0
         }
         !skip
@@ -225,6 +238,47 @@ else
     print_success "Shell configuration already present"
 fi
 
+# GovCloud launcher. Partition MUST be selected via a --settings file, not shell
+# env: settings.json's env block overrides shell env vars, so an
+# `AWS_REGION=us-gov-west-1 claude` alias is silently defeated by the commercial
+# region in settings.json (gov model ID then hits the commercial endpoint -> 400
+# invalid model). A --settings file instead LAYERS on top of the base
+# settings.json (hooks/plugins/statusline inherited) and its env block wins.
+#
+# gov.settings.json pins the gov profile/region and the us-gov. model IDs (the
+# /model picker resolves aliases to us.anthropic.* regardless of region). Model
+# is set via ANTHROPIC_DEFAULT_OPUS_MODEL + "model":"opus" so the alias resolves
+# through the pin (a raw gov model string in the "model" field is ignored across
+# files). No Haiku var: no usable Haiku in gov, unset => background tasks run on
+# the primary model.
+mkdir -p ~/.claude
+cat > ~/.claude/gov.settings.json << 'EOF'
+{
+  "awsAuthRefresh": "aws sso login --profile gc-prod-it01-bedrock",
+  "env": {
+    "CLAUDE_CODE_USE_BEDROCK": "1",
+    "AWS_PROFILE": "gc-prod-it01-bedrock",
+    "AWS_REGION": "us-gov-west-1",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "us-gov.anthropic.claude-opus-4-8",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0"
+  },
+  "model": "opus"
+}
+EOF
+print_success "GovCloud settings written (~/.claude/gov.settings.json)"
+
+# claude-gov launcher (bare `claude` stays commercial via the base settings.json).
+if ! grep -q "# Claude Code GovCloud launcher" "$SHELL_RC" 2>/dev/null; then
+    cat >> "$SHELL_RC" << 'EOF'
+
+# Claude Code GovCloud launcher
+alias claude-gov='claude --settings ~/.claude/gov.settings.json'
+EOF
+    print_success "claude-gov launcher added"
+else
+    print_success "claude-gov launcher already present"
+fi
+
 source "$SHELL_RC" 2>/dev/null || true
 
 # ── Step 5: Claude Code ───────────────────────────────────────────────────
@@ -261,11 +315,19 @@ else
         REF_ENV=$(echo "$REFERENCE" | jq '.env')
         REF_AUTH=$(echo "$REFERENCE" | jq -r '.awsAuthRefresh')
 
+        # awsAuthRefresh is force-updated (not set-if-absent) so existing installs
+        # pick up the profile-following form. Warn if we're replacing a different
+        # value — a user with a custom auth wrapper should know it changed.
+        OLD_AUTH=$(jq -r '.awsAuthRefresh // empty' "$CLAUDE_SETTINGS" 2>/dev/null)
+        if [ -n "$OLD_AUTH" ] && [ "$OLD_AUTH" != "$REF_AUTH" ]; then
+            print_warning "awsAuthRefresh updated to '$REF_AUTH' (was: '$OLD_AUTH'); backup at $BACKUP_FILE"
+        fi
+
         # Merge reference env + awsAuthRefresh, and strip any pinned model ARNs
         # from older versions so Claude Code's native /model picker takes over.
         jq --argjson new_env "$REF_ENV" \
            --arg new_auth "$REF_AUTH" '
-          .awsAuthRefresh //= $new_auth |
+          .awsAuthRefresh = $new_auth |
           .env = (.env // {}) + $new_env |
           del(.env.ANTHROPIC_DEFAULT_OPUS_MODEL,
               .env.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME,
