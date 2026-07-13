@@ -1,108 +1,56 @@
 #!/usr/bin/env bash
-# One-time migration for existing Claude Code + Bedrock users.
+# Reconfigure an EXISTING Claude Code + Bedrock install to the latest setup,
+# WITHOUT reinstalling the Claude Code binary.
 #
-# Removes the pinned model ARN env vars that earlier versions of this repo
-# installed (ANTHROPIC_DEFAULT_OPUS_MODEL, etc.) so Claude Code's native
-# /model picker takes over and the full Bedrock model list is available.
+# This runs the full setup_ccb.sh with CCB_SKIP_CLAUDE_INSTALL=1, so it does
+# everything setup does — migrates ~/.aws/config to the modern sso-session
+# format, adds BOTH the commercial (prod-it01-bedrock) and GovCloud
+# (gc-prod-it01-bedrock) profiles, writes ~/.claude/gov.settings.json, installs
+# the claude-gov launcher, merges ~/.claude/settings.json (stripping any legacy
+# pinned model ARNs and updating awsAuthRefresh), and registers the plugin
+# marketplace — but leaves your existing `claude` binary untouched.
 #
-# Safe to re-run. Creates a timestamped backup before modifying.
+# Safe to re-run; setup_ccb.sh is idempotent and backs up files it changes.
 #
 # Usage:
 #   bash update_claude_code.sh
 #   bash <(curl -fsSL https://raw.githubusercontent.com/Albedo-Space-Corp/claude_code/refs/heads/main/update_claude_code.sh)
+#
+#   # Run against a sibling setup_ccb.sh instead of curling (for local dev):
+#   bash update_claude_code.sh --local
 
 set -eo pipefail
 
-CLAUDE_SETTINGS="$HOME/.claude/settings.json"
-AWS_CONFIG="$HOME/.aws/config"
+SETUP_URL="https://raw.githubusercontent.com/Albedo-Space-Corp/claude_code/refs/heads/main/setup_ccb.sh"
 
-# ── Best-effort: migrate a legacy inline prod-it01-bedrock profile to the
-# modern sso-session format. The canonical migration lives in setup_ccb.sh;
-# this is a convenience so a stray `update` run also fixes auth. Skips quietly
-# if the profile is missing or already modern.
-migrate_aws_config() {
-    [[ -f "$AWS_CONFIG" ]] || return 0
-    grep -q "^\[profile prod-it01-bedrock\]" "$AWS_CONFIG" || return 0
-    # Already modern? (profile references an sso-session) → nothing to do.
-    if awk '/^\[profile prod-it01-bedrock\]/{f=1;next} /^\[/{f=0} f && /^[[:space:]]*sso_session[[:space:]]*=/{found=1} END{exit !found}' "$AWS_CONFIG"; then
-        echo "✓ AWS profile already on sso-session format."
-        return 0
+echo "=============================================================="
+echo "Claude Code Bedrock — Update / Reconfigure"
+echo "  Runs the full setup (both AWS profiles, gov settings +"
+echo "  claude-gov launcher, settings.json merge, marketplace)"
+echo "  but SKIPS installing the Claude Code binary."
+echo "=============================================================="
+echo ""
+
+export CCB_SKIP_CLAUDE_INSTALL=1
+
+if [ "${1:-}" = "--local" ]; then
+    # Run the setup script sitting next to this one (development / testing).
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    LOCAL_SETUP="$SCRIPT_DIR/setup_ccb.sh"
+    if [ ! -f "$LOCAL_SETUP" ]; then
+        echo "✗ --local given but no setup_ccb.sh next to this script ($LOCAL_SETUP)." >&2
+        exit 1
     fi
-    local acct
-    acct=$(awk '/^\[profile prod-it01-bedrock\]/{f=1;next} /^\[/{f=0} f && /^[[:space:]]*sso_account_id[[:space:]]*=/{print $3; exit}' "$AWS_CONFIG")
-    acct="${acct:-188343044386}"
-    local block="[sso-session albedo-commercial]
-sso_start_url = https://albedo.awsapps.com/start
-sso_region = us-west-2
-sso_registration_scopes = sso:account:access
-
-[profile prod-it01-bedrock]
-sso_session = albedo-commercial
-sso_account_id = $acct
-sso_role_name = AlbedoBedrockUsers
-region = us-west-2
-output = json"
-    local bak="$AWS_CONFIG.bak.$(date +%Y%m%d_%H%M%S)"
-    cp "$AWS_CONFIG" "$bak"
-    local rem
-    rem=$(awk '/^\[/ { if ($0 ~ /^\[(profile[[:space:]]+prod-it01-bedrock|sso-session[[:space:]]+albedo-commercial)\][[:space:]]*$/) { skip=1; next } skip=0 } !skip' "$AWS_CONFIG")
-    { printf '%s\n\n' "$block"; printf '%s\n' "$rem"; } | cat -s > "$AWS_CONFIG.new"
-    mv "$AWS_CONFIG.new" "$AWS_CONFIG"
-    rm -f "$HOME"/.aws/cli/cache/*.json 2>/dev/null || true
-    echo "✓ Migrated prod-it01-bedrock to sso-session format (backup: $bak)"
-    echo "  Next 'aws sso login' = one browser prompt, then silent refresh for ~7 days."
-}
-migrate_aws_config
-
-echo "=============================================================="
-echo "Claude Code Bedrock Migration"
-echo "  Removes pinned model ARNs so the native /model picker takes"
-echo "  over. All other settings (hooks, plugins, etc.) are preserved."
-echo "=============================================================="
-echo ""
-
-if ! command -v jq &> /dev/null; then
-    echo "jq is required. Install with:"
-    echo "  macOS:  brew install jq"
-    echo "  Linux:  sudo apt-get install jq"
-    exit 1
+    echo "Running local setup: $LOCAL_SETUP"
+    bash "$LOCAL_SETUP"
+else
+    # Fetch the canonical setup script and run it. A temp file (not a pipe) so
+    # setup's own process-substitution re-exec / sudo handling behaves.
+    _tmp=$(mktemp /tmp/setup_ccb.XXXXXX.sh)
+    trap 'rm -f "$_tmp"' EXIT
+    if ! curl -fsSL "$SETUP_URL" -o "$_tmp"; then
+        echo "✗ Failed to download setup script from $SETUP_URL" >&2
+        exit 1
+    fi
+    bash "$_tmp"
 fi
-
-if [[ ! -f "$CLAUDE_SETTINGS" ]]; then
-    echo "No $CLAUDE_SETTINGS found."
-    echo "Run setup_ccb.sh first to create a baseline configuration."
-    exit 1
-fi
-
-# Check if any of the pinned keys are actually present
-HAS_PINS=$(jq '
-    (.env.ANTHROPIC_DEFAULT_OPUS_MODEL // empty),
-    (.env.ANTHROPIC_DEFAULT_SONNET_MODEL // empty),
-    (.env.ANTHROPIC_DEFAULT_HAIKU_MODEL // empty)
-' "$CLAUDE_SETTINGS")
-
-if [[ -z "$HAS_PINS" ]]; then
-    echo "✓ No pinned model ARNs found. Nothing to migrate."
-    exit 0
-fi
-
-BACKUP_FILE="$CLAUDE_SETTINGS.backup.$(date +%Y%m%d_%H%M%S)"
-cp "$CLAUDE_SETTINGS" "$BACKUP_FILE"
-echo "✓ Backup: $BACKUP_FILE"
-
-jq 'del(.env.ANTHROPIC_DEFAULT_OPUS_MODEL,
-        .env.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME,
-        .env.ANTHROPIC_DEFAULT_OPUS_MODEL_DESCRIPTION,
-        .env.ANTHROPIC_DEFAULT_SONNET_MODEL,
-        .env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME,
-        .env.ANTHROPIC_DEFAULT_SONNET_MODEL_DESCRIPTION,
-        .env.ANTHROPIC_DEFAULT_HAIKU_MODEL,
-        .env.ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME,
-        .env.ANTHROPIC_DEFAULT_HAIKU_MODEL_DESCRIPTION)
-' "$CLAUDE_SETTINGS" > /tmp/claude_settings_migrated.json
-mv /tmp/claude_settings_migrated.json "$CLAUDE_SETTINGS"
-
-echo "✓ Pinned model ARNs removed"
-echo ""
-echo "Restart Claude Code and run /model to see the full Bedrock model list."
-echo "Current session will keep its existing model until you restart."

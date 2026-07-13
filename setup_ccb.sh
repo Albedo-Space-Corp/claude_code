@@ -282,7 +282,13 @@ fi
 source "$SHELL_RC" 2>/dev/null || true
 
 # ── Step 5: Claude Code ───────────────────────────────────────────────────
-if command_exists claude; then
+# CCB_SKIP_CLAUDE_INSTALL=1 skips the binary install (used by
+# update_claude_code.sh, which reconfigures existing installs without
+# reinstalling Claude Code). PATH is still ensured so later steps find claude.
+if [ "${CCB_SKIP_CLAUDE_INSTALL:-0}" = "1" ]; then
+    export PATH="$HOME/.local/bin:$PATH"
+    print_status "Skipping Claude Code install (update mode)"
+elif command_exists claude; then
     print_success "Claude Code already installed"
 else
     print_status "Installing Claude Code..."

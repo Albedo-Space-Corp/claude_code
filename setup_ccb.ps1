@@ -141,7 +141,12 @@ Write-Status "Checking for Claude Code..."
 $claudeBin = Join-Path $env:USERPROFILE ".local\bin"
 $claudeExe = Join-Path $claudeBin "claude.exe"
 
-if (Get-Command claude -ErrorAction SilentlyContinue) {
+# CCB_SKIP_CLAUDE_INSTALL=1 skips the binary install (used by
+# update_claude_code.ps1, which reconfigures existing installs). PATH handling
+# below still runs so later steps and the user's shell find claude.
+if ($env:CCB_SKIP_CLAUDE_INSTALL -eq "1") {
+    Write-Status "Skipping Claude Code install (update mode)"
+} elseif (Get-Command claude -ErrorAction SilentlyContinue) {
     Write-Ok "Claude Code already installed (in PATH)"
 } elseif (Test-Path $claudeExe) {
     Write-Ok "Claude Code already installed at $claudeExe"
