@@ -420,6 +420,7 @@ if (Select-String -Path $PROFILE -Pattern ([regex]::Escape($launcherMarker)) -Qu
 } else {
     Add-Content -Path $PROFILE -Value $launcherBlock
     Write-Ok "claude-gov launcher added to `$PROFILE"
+    Write-Warn "Open a NEW PowerShell window (or run: . `"`$PROFILE`") before 'claude-gov' works"
 }
 
 # ── Step 7: Setup S3 plugin marketplace ───────────────────────────────
@@ -536,7 +537,11 @@ Write-Ok "Plugin marketplace registered"
 # ── Verification ─────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "===========================================================" -ForegroundColor Green
-Write-Host "  Setup Complete!"                                           -ForegroundColor Green
+if ($env:CCB_SKIP_CLAUDE_INSTALL -eq "1") {
+    Write-Host "  Reconfigure Complete! (Claude Code binary left as-is)"   -ForegroundColor Green
+} else {
+    Write-Host "  Setup Complete!"                                         -ForegroundColor Green
+}
 Write-Host "===========================================================" -ForegroundColor Green
 Write-Host ""
 
@@ -602,9 +607,10 @@ if ((Test-Path $kmPath) -and (Select-String -Path $kmPath -Pattern "albedo-claud
 
 Write-Host ""
 Write-Status "Next steps:"
-Write-Host "  1. Close and reopen PowerShell"
-Write-Host "  2. Run: claude"
-Write-Host "  3. Run /plugin inside Claude Code to browse the Albedo marketplace"
+Write-Host "  1. Close and reopen PowerShell - required for the claude-gov launcher"
+Write-Host "  2. Run: claude          (commercial Bedrock)"
+Write-Host "  3. Run: claude-gov      (GovCloud Bedrock - needs the new window from step 1)"
+Write-Host "  4. Run /plugin inside Claude Code to browse the Albedo marketplace"
 Write-Host ""
 Write-Warn "You may need to restart your terminal for PATH changes to take effect."
 Write-Host ""

@@ -274,7 +274,8 @@ if ! grep -q "# Claude Code GovCloud launcher" "$SHELL_RC" 2>/dev/null; then
 # Claude Code GovCloud launcher
 alias claude-gov='claude --settings ~/.claude/gov.settings.json'
 EOF
-    print_success "claude-gov launcher added"
+    print_success "claude-gov launcher added to $SHELL_RC"
+    print_warning "Open a NEW terminal (or run: source \"$SHELL_RC\") before 'claude-gov' works"
 else
     print_success "claude-gov launcher already present"
 fi
@@ -437,13 +438,22 @@ print_success "Plugin marketplace registered"
 echo
 echo -e "${GREEN}"
 echo "╔════════════════════════════════════════════════════════════╗"
-echo "║   Setup Complete!                                          ║"
+if [ "${CCB_SKIP_CLAUDE_INSTALL:-0}" = "1" ]; then
+    echo "║   Reconfigure Complete!                                    ║"
+else
+    echo "║   Setup Complete!                                          ║"
+fi
 echo "╚════════════════════════════════════════════════════════════╝"
 echo -e "${NC}"
-print_success "All tools installed and configured"
+if [ "${CCB_SKIP_CLAUDE_INSTALL:-0}" = "1" ]; then
+    print_success "Configuration updated (Claude Code binary left as-is)"
+else
+    print_success "All tools installed and configured"
+fi
 echo
 print_status "Next steps:"
-echo "  1. Open a new terminal (or run: source $SHELL_RC)"
-echo "  2. Run: claude"
-echo "  3. Run /plugin inside Claude Code to browse the Albedo marketplace"
+echo "  1. Open a NEW terminal (or run: source \"$SHELL_RC\") — required for the claude-gov alias"
+echo "  2. Run: claude          (commercial Bedrock)"
+echo "  3. Run: claude-gov      (GovCloud Bedrock — needs the new terminal from step 1)"
+echo "  4. Run /plugin inside Claude Code to browse the Albedo marketplace"
 echo
