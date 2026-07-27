@@ -330,12 +330,25 @@ else
             print_warning "awsAuthRefresh updated to '$REF_AUTH' (was: '$OLD_AUTH'); backup at $BACKUP_FILE"
         fi
 
-        # Merge reference env + awsAuthRefresh, and strip any pinned model ARNs
-        # from older versions so Claude Code's native /model picker takes over.
+        # A top-level "model" pin (written by the /model picker, or a leftover
+        # "opusplan" from a pre-v5.2.0 reference) overrides model selection and
+        # can wedge the picker so it stops surfacing the full catalog. The
+        # commercial reference intentionally has no "model" field — model
+        # selection lives in the picker — so migration clears it. (gov.settings.json
+        # is written fresh, not merged, so its intentional "model":"opus" is safe.)
+        OLD_MODEL=$(jq -r '.model // empty' "$CLAUDE_SETTINGS" 2>/dev/null)
+        if [ -n "$OLD_MODEL" ]; then
+            print_warning "Removed top-level \"model\": \"$OLD_MODEL\" pin so the /model picker controls selection; backup at $BACKUP_FILE"
+        fi
+
+        # Merge reference env + awsAuthRefresh, strip the top-level model pin, and
+        # strip any pinned model ARN env vars from older versions so Claude Code's
+        # native /model picker takes over.
         jq --argjson new_env "$REF_ENV" \
            --arg new_auth "$REF_AUTH" '
           .awsAuthRefresh = $new_auth |
           .env = (.env // {}) + $new_env |
+          del(.model) |
           del(.env.ANTHROPIC_DEFAULT_OPUS_MODEL,
               .env.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME,
               .env.ANTHROPIC_DEFAULT_OPUS_MODEL_DESCRIPTION,

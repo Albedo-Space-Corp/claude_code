@@ -367,6 +367,17 @@ if (Test-Path $claudeSettings) {
             }
         }
 
+        # A top-level "model" pin (written by the /model picker, or a leftover
+        # "opusplan" from a pre-v5.2.0 reference) overrides model selection and
+        # can wedge the picker so it stops surfacing the full catalog. The
+        # commercial reference intentionally has no "model" field, so migration
+        # clears it. (gov.settings.json is written fresh, not merged, so its
+        # intentional "model":"opus" is unaffected.)
+        if ($existing.PSObject.Properties["model"]) {
+            Write-Warn "Removed top-level `"model`": `"$($existing.model)`" pin so the /model picker controls selection; backup at $backupFile"
+            $existing.PSObject.Properties.Remove("model")
+        }
+
         $merged = $existing | ConvertTo-Json -Depth 10
         Write-Utf8NoBom -Path $claudeSettings -Content $merged
         Write-Ok "Settings merged"
