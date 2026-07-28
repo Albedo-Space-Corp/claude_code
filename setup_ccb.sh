@@ -151,7 +151,7 @@ fi
 # that pointer, and gets silent refresh for free. The legacy inline format
 # (sso_start_url etc. directly in the profile) has NO refresh token, so it
 # forces interactive re-auth the moment the ~8h access token expires.
-print_status "Configuring AWS profile (prod-it01-bedrock, sso-session format)..."
+print_status "Configuring AWS profiles (prod-it01-bedrock + gc-prod-it01-bedrock, sso-session format)..."
 mkdir -p ~/.aws
 
 # Canonical target: one sso-session block + a profile that references it.
@@ -280,6 +280,7 @@ else
     print_success "claude-gov launcher already present"
 fi
 
+# shellcheck source=/dev/null  # path is user-shell dependent, resolved at runtime
 source "$SHELL_RC" 2>/dev/null || true
 
 # ── Step 5: Claude Code ───────────────────────────────────────────────────

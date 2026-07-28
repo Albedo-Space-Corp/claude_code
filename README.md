@@ -10,8 +10,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Albedo-Space-Corp/claude_cod
 
 This installs:
 - AWS CLI, jq, Claude Code
-- AWS SSO profile (prod-it01-bedrock)
-- Bedrock configuration in `~/.claude/settings.json`
+- AWS SSO profiles for commercial (`prod-it01-bedrock`) and GovCloud (`gc-prod-it01-bedrock`)
+- Bedrock configuration in `~/.claude/settings.json`, plus a `claude-gov` launcher
 - S3 plugin marketplace (git-remote-s3 + marketplace registration)
 
 After installation:
@@ -20,45 +20,56 @@ claude                # Launch Claude Code
 /plugin               # Browse the Albedo plugin marketplace
 ```
 
-## Migrate Existing Setup (v5.0.0 → v5.2.0)
+## Update an Existing Setup
 
-If you ran setup before ~April 2026, you likely have pinned model ARN env vars in your `~/.claude/settings.json`. These limit the `/model` picker to just Opus/Sonnet/Haiku at whatever versions were pinned. Run:
+Run this if you set up before ~July 2026, or any time you want to pull the latest
+configuration. It reconfigures everything without reinstalling Claude Code itself:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/Albedo-Space-Corp/claude_code/refs/heads/main/update_claude_code.sh)
 ```
 
-This removes the pinned ARNs so Claude Code's native `/model` picker shows the full Bedrock model list (including 1M context variants). Your hooks, plugins, and other settings are preserved.
+It adds both AWS SSO profiles (migrating older ones to the format that refreshes
+credentials silently), installs the GovCloud settings and `claude-gov` launcher, strips
+any pinned model ARNs so the `/model` picker shows the full Bedrock catalog, and registers
+the plugin marketplace. Your hooks, plugins, and other settings are preserved, and it's
+safe to re-run.
+
+**Windows:**
+```powershell
+irm https://raw.githubusercontent.com/Albedo-Space-Corp/claude_code/refs/heads/main/update_claude_code.ps1 | iex
+```
 
 **Note:** The `claude_bedrock.sh` wrapper still works if you prefer it.
 
-## What's New in v5.2.0
+## What's New
 
-**Native model picker:** Removed pinned model ARNs. Claude Code's built-in `/model` picker now controls model selection, exposing all available Bedrock models (including 1M context variants).
+**v5.3.0, GovCloud support.** Setup now adds a GovCloud profile, writes
+`~/.claude/gov.settings.json`, and installs a `claude-gov` launcher. Bare `claude` still
+runs against commercial Bedrock. See [Commercial vs GovCloud](#commercial-vs-govcloud).
 
-**Why this is better:**
-- New models (e.g., Opus 4.8) appear automatically when Claude Code updates — no more `update_claude_code.sh` runs for model changes
-- 1M context variants are now selectable via the picker
-- Smaller `settings.json` — no account ID substitution, no model ARNs to maintain
+**v5.2.0, native model picker.** Pinned model ARNs are gone; Claude Code's built-in
+`/model` picker controls model selection. New models appear automatically when Claude Code
+updates, 1M-context variants are selectable, and `settings.json` no longer carries any
+model ARNs to maintain.
 
 ## Usage
 
 ```bash
-# Launch with default model (opusplan - auto-switching)
+# Launch Claude Code (uses the model from your last session)
 claude
 
-# Resume Conversations
+# Resume a conversation
 claude --resume
 
-# Launch with specific model
-claude --model opus      # Opus 4.7 for everything
-claude --model sonnet    # Sonnet 4.6 for everything
-claude --model haiku     # Haiku 4.5 for everything
+# Launch with a specific model
+claude --model opus
+claude --model sonnet
+claude --model haiku
 
-# Switch models during session
-/model opus
-/model sonnet
-/model opusplan
+# Switch models during a session. The picker lists everything available,
+# including 1M-context variants
+/model
 ```
 
 ### Commercial vs GovCloud
@@ -71,7 +82,7 @@ claude          # Commercial Bedrock (default)
 claude-gov      # GovCloud Bedrock (gc-prod-it01-bedrock, us-gov-west-1)
 ```
 
-`claude-gov` is `claude --settings ~/.claude/gov.settings.json` — a small settings file that
+`claude-gov` is `claude --settings ~/.claude/gov.settings.json`, a small settings file that
 layers over your normal config (hooks, plugins, and statusline all carry over) and switches
 the AWS profile, region, and models to GovCloud. It composes with flags: `claude-gov --resume`.
 
@@ -81,7 +92,7 @@ resolves to commercial-only IDs. Background tasks run on your primary model (the
 Haiku tier in GovCloud yet).
 
 > GovCloud access requires the `AlbedoBedrockUsers` role in the GovCloud account. If
-> `claude-gov` fails at login, that role may not be provisioned yet — contact #it-help.
+> `claude-gov` fails at login, that role may not be provisioned yet. Contact #it-help.
 
 ### Windows
 
@@ -94,7 +105,7 @@ powershell -ExecutionPolicy Bypass -File "$HOME\Downloads\setup_ccb.ps1"
 ## Requirements
 
 - macOS, Linux (Ubuntu/WSL), or Windows 10/11
-- AWS SSO access to Albedo's prod-it01 account
+- AWS SSO access to Albedo's prod-it01 account (plus gc-prod-it01 for GovCloud)
 - AlbedoBedrockUsers role permissions
 
 ## Plugin Marketplace (Existing Users)
@@ -114,12 +125,9 @@ Then open Claude Code and run `/plugin` → **Update marketplace** to sync plugi
 
 ## Documentation
 
-See [CLAUDE.md](.claude/CLAUDE.md) for complete documentation including:
-- Architecture overview
-- AWS profile configuration
-- Model activation process
-- Troubleshooting guide
-- IAM policy reference
+Full internal documentation lives in the GitLab source repo (`devops/leverages/claude_bedrock`)
+and covers the architecture, AWS profile configuration, the model activation process,
+troubleshooting, and the IAM policy reference. Ask in #it-help if you need access.
 
 ## Support
 
