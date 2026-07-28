@@ -91,8 +91,8 @@ correct `us-gov.` inference profiles for you, because Claude Code's `/model` pic
 resolves to commercial-only IDs. Background tasks run on your primary model (there is no
 Haiku tier in GovCloud yet).
 
-> GovCloud access requires the `AlbedoBedrockUsers` role in the GovCloud account. If
-> `claude-gov` fails at login, that role may not be provisioned yet. Contact #it-help.
+> GovCloud access requires the `AlbedoBedrockUsers` role in the GovCloud account, which
+> your SSO login grants. If `claude-gov` fails at login, ask in #it-help.
 
 ### Windows
 
