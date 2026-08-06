@@ -259,7 +259,7 @@ cat > ~/.claude/gov.settings.json << 'EOF'
     "CLAUDE_CODE_USE_BEDROCK": "1",
     "AWS_PROFILE": "gc-prod-it01-bedrock",
     "AWS_REGION": "us-gov-west-1",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "us-gov.anthropic.claude-opus-4-8",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "us-gov.anthropic.claude-opus-4-8[1m]",
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0"
   },
   "model": "opus"
