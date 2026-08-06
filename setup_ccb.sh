@@ -245,12 +245,14 @@ fi
 # invalid model). A --settings file instead LAYERS on top of the base
 # settings.json (hooks/plugins/statusline inherited) and its env block wins.
 #
-# gov.settings.json pins the gov profile/region and the us-gov. model IDs (the
-# /model picker resolves aliases to us.anthropic.* regardless of region). Model
-# is set via ANTHROPIC_DEFAULT_OPUS_MODEL + "model":"opus" so the alias resolves
-# through the pin (a raw gov model string in the "model" field is ignored across
-# files). No Haiku var: no usable Haiku in gov, unset => background tasks run on
-# the primary model.
+# gov.settings.json pins the gov profile/region and the us-gov. model IDs. We
+# pin rather than trust the /model picker: the picker is region-aware (it does
+# emit us-gov. IDs) but its built-in gov catalog doesn't match the account — it
+# offers models that don't exist there (400 invalid model identifier) and never
+# exposes the 1M variants. Model is set via ANTHROPIC_DEFAULT_OPUS_MODEL +
+# "model":"opus" so the alias resolves through the pin (a raw gov model string
+# in the "model" field is ignored across files). No Haiku var: no usable Haiku
+# in gov, unset => background tasks run on the primary model.
 mkdir -p ~/.claude
 cat > ~/.claude/gov.settings.json << 'EOF'
 {
@@ -260,7 +262,7 @@ cat > ~/.claude/gov.settings.json << 'EOF'
     "AWS_PROFILE": "gc-prod-it01-bedrock",
     "AWS_REGION": "us-gov-west-1",
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "us-gov.anthropic.claude-opus-4-8[1m]",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "us-gov.anthropic.claude-sonnet-5[1m]"
   },
   "model": "opus"
 }
