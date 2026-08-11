@@ -253,6 +253,13 @@ fi
 # "model":"opus" so the alias resolves through the pin (a raw gov model string
 # in the "model" field is ignored across files). No Haiku var: no usable Haiku
 # in gov, unset => background tasks run on the primary model.
+#
+# KEEP_MARKETPLACE_ON_FAILURE: the marketplace refresh that runs in the
+# background after startup does a `git pull` on the s3:// remote. With stale AWS
+# credentials that pull fails, and the default response is a full re-clone that
+# fails the same way — every session, each git operation waiting out a 120s
+# timeout. This keeps the existing clone instead; `/plugin marketplace update`
+# still pulls with live credentials.
 mkdir -p ~/.claude
 cat > ~/.claude/gov.settings.json << 'EOF'
 {
@@ -262,7 +269,8 @@ cat > ~/.claude/gov.settings.json << 'EOF'
     "AWS_PROFILE": "gc-prod-it01-bedrock",
     "AWS_REGION": "us-gov-west-1",
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "us-gov.anthropic.claude-opus-4-8[1m]",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "us-gov.anthropic.claude-sonnet-5[1m]"
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "us-gov.anthropic.claude-sonnet-5[1m]",
+    "CLAUDE_CODE_PLUGIN_KEEP_MARKETPLACE_ON_FAILURE": "1"
   },
   "model": "opus"
 }

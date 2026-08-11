@@ -395,6 +395,13 @@ if (Test-Path $claudeSettings) {
 # (hooks/plugins/statusline inherited) and its env block wins. Model pinned via
 # ANTHROPIC_DEFAULT_OPUS_MODEL + "model":"opus" (a raw gov model string in the
 # "model" field is ignored across files). No Haiku var: no usable Haiku in gov.
+#
+# KEEP_MARKETPLACE_ON_FAILURE: the marketplace refresh that runs in the
+# background after startup does a `git pull` on the s3:// remote. With stale AWS
+# credentials that pull fails, and the default response is a full re-clone that
+# fails the same way — every session, each git operation waiting out a 120s
+# timeout. This keeps the existing clone instead; `/plugin marketplace update`
+# still pulls with live credentials.
 Write-Status "Writing GovCloud settings + claude-gov launcher..."
 
 $govSettings = Join-Path $claudeDir "gov.settings.json"
@@ -406,7 +413,8 @@ $govSettingsContent = @'
     "AWS_PROFILE": "gc-prod-it01-bedrock",
     "AWS_REGION": "us-gov-west-1",
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "us-gov.anthropic.claude-opus-4-8[1m]",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "us-gov.anthropic.claude-sonnet-5[1m]"
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "us-gov.anthropic.claude-sonnet-5[1m]",
+    "CLAUDE_CODE_PLUGIN_KEEP_MARKETPLACE_ON_FAILURE": "1"
   },
   "model": "opus"
 }
