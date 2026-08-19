@@ -412,7 +412,7 @@ $govSettingsContent = @'
     "CLAUDE_CODE_USE_BEDROCK": "1",
     "AWS_PROFILE": "gc-prod-it01-bedrock",
     "AWS_REGION": "us-gov-west-1",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "us-gov.anthropic.claude-opus-4-8[1m]",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "us-gov.anthropic.claude-opus-5[1m]",
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "us-gov.anthropic.claude-sonnet-5[1m]",
     "CLAUDE_CODE_PLUGIN_KEEP_MARKETPLACE_ON_FAILURE": "1"
   },

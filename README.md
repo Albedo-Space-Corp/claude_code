@@ -86,10 +86,10 @@ claude-gov      # GovCloud Bedrock (gc-prod-it01-bedrock, us-gov-west-1)
 layers over your normal config (hooks, plugins, and statusline all carry over) and switches
 the AWS profile, region, and models to GovCloud. It composes with flags: `claude-gov --resume`.
 
-GovCloud has a smaller catalog (Opus 4.8 and Sonnet 4.5); the gov settings file pins the
-correct `us-gov.` inference profiles for you, because Claude Code's `/model` picker otherwise
-resolves to commercial-only IDs. Background tasks run on your primary model (there is no
-Haiku tier in GovCloud yet).
+GovCloud has a smaller catalog (Opus 5 and Sonnet 5); the gov settings file pins the correct
+`us-gov.` inference profiles for you, because Claude Code's `/model` picker resolves its gov
+aliases to older models and never to the 1M-context variants. Background tasks run on your
+primary model (there is no Haiku tier in GovCloud yet).
 
 > GovCloud access requires the `AlbedoBedrockUsers` role in the GovCloud account, which
 > your SSO login grants. If `claude-gov` fails at login, ask in #it-help.
