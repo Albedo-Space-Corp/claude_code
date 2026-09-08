@@ -254,11 +254,12 @@ fi
 # in gov, unset => background tasks run on the primary model.
 #
 # KEEP_MARKETPLACE_ON_FAILURE: the marketplace refresh that runs in the
-# background after startup does a `git pull` on the s3:// remote. With stale AWS
-# credentials that pull fails, and the default response is a full re-clone that
-# fails the same way — every session, each git operation waiting out a 120s
-# timeout. This keeps the existing clone instead; `/plugin marketplace update`
-# still pulls with live credentials.
+# background after startup does a `git pull` on the marketplace remote, which
+# authenticates with the current AWS credentials. With stale credentials that
+# pull fails, and the default response is a full re-clone that fails the same
+# way — every session, each git operation waiting out a 120s timeout. This keeps
+# the existing clone instead; `/plugin marketplace update` still pulls with live
+# credentials.
 mkdir -p ~/.claude
 cat > ~/.claude/gov.settings.json << 'EOF'
 {
@@ -297,20 +298,23 @@ source "$SHELL_RC" 2>/dev/null || true
 # update_claude_code.sh, which reconfigures existing installs without
 # reinstalling Claude Code). PATH is still ensured so later steps find claude.
 if [ "${CCB_SKIP_CLAUDE_INSTALL:-0}" = "1" ]; then
-    export PATH="$HOME/.local/bin:$PATH"
     print_status "Skipping Claude Code install (update mode)"
 elif command_exists claude; then
     print_success "Claude Code already installed"
 else
     print_status "Installing Claude Code..."
     curl -fsSL https://claude.ai/install.sh | bash
-
-    if ! grep -q '\.local/bin' "$SHELL_RC" 2>/dev/null; then
-        echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$SHELL_RC"
-    fi
-    export PATH="$HOME/.local/bin:$PATH"
     print_success "Claude Code installed"
 fi
+
+# Claude Code lives in ~/.local/bin, which a non-login shell does not have on
+# PATH. Persist it for future shells and export it for the rest of this run, in
+# every branch above: update mode reconfigures machines whose rc may predate
+# this line.
+if ! grep -q '\.local/bin' "$SHELL_RC" 2>/dev/null; then
+    echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$SHELL_RC"
+fi
+export PATH="$HOME/.local/bin:$PATH"
 
 # ── Step 6: Claude Code Bedrock settings ──────────────────────────────────
 print_status "Configuring Claude Code for Bedrock..."
@@ -378,56 +382,55 @@ fi
 # ── Step 7: Plugin marketplace ────────────────────────────────────────────
 print_status "Setting up Albedo plugin marketplace..."
 
-MARKETPLACE_URL="s3://plugin-marketplace-prod-it01-${ACCOUNT_ID}/marketplace"
+# The marketplace is a CodeCommit repository cloned over HTTPS, authorized by
+# the caller's own AlbedoBedrockUsers role. Claude Code accepts only
+# https / http / ssh / scp-style / host-less file:// marketplace URLs.
+#
+# The trailing .git is mandatory: without it Claude Code classifies the URL as a
+# direct marketplace.json download, sends no credentials, and fails with an
+# opaque HTTP 401.
 MARKETPLACE_KEY="albedo-claude-plugin-marketplace"
+MARKETPLACE_REPO="albedo-plugins"
+CODECOMMIT_HOST="git-codecommit.us-west-2.amazonaws.com"
+MARKETPLACE_URL="https://${CODECOMMIT_HOST}/v1/repos/${MARKETPLACE_REPO}.git"
 KNOWN_MARKETPLACES="$HOME/.claude/plugins/known_marketplaces.json"
+MARKETPLACE_CLONE="$HOME/.claude/plugins/marketplaces/$MARKETPLACE_KEY"
+CRED_SECTION="credential.${MARKETPLACE_URL}"
 
-# Install git-remote-s3
-# pipx/uv install to ~/.local/bin, which isn't always on PATH in non-login
-# shells. Add it now so this script (and the Claude Code launched next) can
-# actually find git-remote-s3. Also persist the PATH edit for future shells.
-export PATH="$HOME/.local/bin:$PATH"
-if [ -f "$SHELL_RC" ] && ! grep -q '\.local/bin' "$SHELL_RC" 2>/dev/null; then
-    echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$SHELL_RC"
+# Drop any cached credential for this host first, while the platform credential
+# store is still the helper git consults. The AWS helper mints a SigV4 password
+# valid for about 15 minutes; a general-purpose store that cached one keeps
+# serving the dead value, which surfaces as intermittent 403s that logging in
+# again never fixes.
+printf 'protocol=https\nhost=%s\npath=v1/repos/%s\n\n' "$CODECOMMIT_HOST" "$MARKETPLACE_REPO" \
+    | git credential reject >/dev/null 2>&1 || true
+printf 'protocol=https\nhost=%s\n\n' "$CODECOMMIT_HOST" \
+    | git credential reject >/dev/null 2>&1 || true
+if [ "$MACHINE" = "Mac" ]; then
+    while security delete-internet-password -s "$CODECOMMIT_HOST" >/dev/null 2>&1; do :; done
 fi
 
-if command_exists git-remote-s3; then
-    print_success "git-remote-s3 already installed"
-else
-    print_status "Installing git-remote-s3..."
-    if command_exists uv; then
-        uv tool install git-remote-s3 || print_warning "uv tool install failed"
-    elif command_exists pipx; then
-        pipx install git-remote-s3 || print_warning "pipx install failed"
-        pipx ensurepath >/dev/null 2>&1 || true
-    elif [ "$MACHINE" = "Linux" ]; then
-        if sudo apt-get install -y pipx >> /dev/null 2>&1; then
-            pipx install git-remote-s3 || print_warning "pipx install failed"
-            pipx ensurepath >/dev/null 2>&1 || true
-        else
-            print_warning "Could not install pipx via apt — install manually: sudo apt install pipx && pipx install git-remote-s3"
-        fi
-    elif command_exists brew; then
-        if brew install pipx; then
-            pipx install git-remote-s3 || print_warning "pipx install failed"
-            pipx ensurepath >/dev/null 2>&1 || true
-        else
-            print_warning "Could not install pipx via brew — install manually: brew install pipx && pipx install git-remote-s3"
-        fi
-    else
-        print_warning "No package manager available (uv, pipx, brew, apt) — install manually: pipx install git-remote-s3"
-    fi
-
-    # Re-check PATH in case pipx just dropped the binary in ~/.local/bin
-    export PATH="$HOME/.local/bin:$PATH"
-    if command_exists git-remote-s3; then
-        print_success "git-remote-s3 installed"
-    else
-        print_error "git-remote-s3 not found on PATH after install."
-        print_error "The Albedo plugin marketplace will fail to clone until this is fixed."
-        print_error "Try:  pipx install git-remote-s3 && pipx ensurepath  (then restart your terminal)"
-    fi
-fi
+# Authenticate through the AWS CLI git credential helper, scoped to this one
+# repository URL so every other remote keeps its own configuration — including
+# any other CodeCommit repository, which may need a different AWS profile.
+#
+# The empty helper entry before the real one is load-bearing. Git consults
+# helpers in configuration order, and the platform store is registered unscoped
+# (the system gitconfig on macOS), so it would answer first and the AWS helper
+# would never run. An empty value resets the inherited list for this repository
+# only.
+#
+# The profile is pinned rather than inherited from the environment because
+# claude-gov runs with AWS_PROFILE set to the GovCloud profile, which cannot
+# read this commercial repository.
+#
+# UseHttpPath earns its place twice: the SigV4 signature covers the repository
+# path, and git only matches a URL-scoped section when it sends that path.
+git config --global --remove-section "$CRED_SECTION" 2>/dev/null || true
+git config --global --add "$CRED_SECTION.helper" ""
+git config --global --add "$CRED_SECTION.helper" "!aws --profile prod-it01-bedrock codecommit credential-helper \$@"
+git config --global "$CRED_SECTION.UseHttpPath" true
+print_success "Git credential helper configured for the marketplace repository"
 
 # Register marketplace
 mkdir -p "$HOME/.claude/plugins"
@@ -435,20 +438,22 @@ OFFICIAL_KEY="claude-plugins-official"
 OFFICIAL_LOC="$HOME/.claude/plugins/marketplaces/$OFFICIAL_KEY"
 NOW=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
 
+# The entry is merged rather than replaced so a hand-set installLocation, and
+# any field Claude Code itself added, survive.
 if [ -f "$KNOWN_MARKETPLACES" ]; then
     jq --arg key "$MARKETPLACE_KEY" \
        --arg url "$MARKETPLACE_URL" \
-       --arg loc "$HOME/.claude/plugins/marketplaces/$MARKETPLACE_KEY" \
+       --arg loc "$MARKETPLACE_CLONE" \
        --arg okey "$OFFICIAL_KEY" \
        --arg oloc "$OFFICIAL_LOC" \
        --arg now "$NOW" \
-       '.[$key] = {source: {source: "git", url: $url}, installLocation: $loc, lastUpdated: $now} | if has($okey) then . else .[$okey] = {source: {source: "github", repo: "anthropics/claude-plugins-official"}, installLocation: $oloc, lastUpdated: $now} end' \
+       '.[$key] = ((.[$key] // {}) + {source: {source: "git", url: $url}, installLocation: (.[$key].installLocation // $loc), lastUpdated: $now}) | if has($okey) then . else .[$okey] = {source: {source: "github", repo: "anthropics/claude-plugins-official"}, installLocation: $oloc, lastUpdated: $now} end' \
        "$KNOWN_MARKETPLACES" > /tmp/known_marketplaces_tmp.json
     mv /tmp/known_marketplaces_tmp.json "$KNOWN_MARKETPLACES"
 else
     jq -n --arg key "$MARKETPLACE_KEY" \
           --arg url "$MARKETPLACE_URL" \
-          --arg loc "$HOME/.claude/plugins/marketplaces/$MARKETPLACE_KEY" \
+          --arg loc "$MARKETPLACE_CLONE" \
           --arg okey "$OFFICIAL_KEY" \
           --arg oloc "$OFFICIAL_LOC" \
           --arg now "$NOW" \
@@ -456,6 +461,60 @@ else
           > "$KNOWN_MARKETPLACES"
 fi
 print_success "Plugin marketplace registered"
+
+# A marketplace may also be declared in settings.json. When that declaration and
+# the registration above disagree, Claude Code refuses the marketplace outright:
+# "its network source differs from the one declared for it in settings".
+MARKETPLACE_SETTINGS="$HOME/.claude/settings.json"
+if [ -f "$MARKETPLACE_SETTINGS" ] && jq -e . "$MARKETPLACE_SETTINGS" >/dev/null 2>&1; then
+    DECLARED_URL=$(jq -r --arg k "$MARKETPLACE_KEY" '.extraKnownMarketplaces[$k].source.url // empty' "$MARKETPLACE_SETTINGS")
+    if [ -n "$DECLARED_URL" ] && [ "$DECLARED_URL" != "$MARKETPLACE_URL" ]; then
+        jq --arg k "$MARKETPLACE_KEY" --arg url "$MARKETPLACE_URL" \
+           '.extraKnownMarketplaces[$k].source = {source: "git", url: $url}' \
+           "$MARKETPLACE_SETTINGS" > /tmp/claude_settings_marketplace.json
+        mv /tmp/claude_settings_marketplace.json "$MARKETPLACE_SETTINGS"
+        print_success "settings.json marketplace declaration updated to match"
+    fi
+fi
+
+# Setup never runs `aws sso login`, so a fresh machine legitimately has no
+# session yet. Report the specific reason and carry on rather than failing.
+#
+# Verification gates the cleanup below it. An existing checkout is a working
+# marketplace even when its remote is unreachable: Claude Code reads plugins from
+# the working tree and needs the remote only to update. Discarding it before the
+# replacement is proven would turn "stale but usable" into "no marketplace at
+# all" for anyone whose SSO session has lapsed.
+print_status "Verifying marketplace access..."
+if MARKETPLACE_ERR=$(git ls-remote "$MARKETPLACE_URL" 2>&1 >/dev/null); then
+    print_success "Marketplace repository reachable"
+
+    # A checkout whose origin is any other URL cannot pull from the marketplace.
+    # The replacement is known good now, so drop it and let Claude Code clone
+    # fresh on launch.
+    if [ -d "$MARKETPLACE_CLONE" ]; then
+        OLD_ORIGIN=$(git -C "$MARKETPLACE_CLONE" remote get-url origin 2>/dev/null || echo "")
+        if [ "$OLD_ORIGIN" != "$MARKETPLACE_URL" ]; then
+            rm -rf "$MARKETPLACE_CLONE"
+            print_success "Removed a stale marketplace clone (origin was ${OLD_ORIGIN:-unknown})"
+        fi
+    fi
+else
+    # git prefixes the credential helper's own output with a newline, so collapse
+    # to one line: otherwise the warning prints with a blank first line and the
+    # real reason buried underneath.
+    MARKETPLACE_ERR="$(printf '%s' "$MARKETPLACE_ERR" | tr '\n' ' ' | sed 's/  */ /g; s/^ *//; s/ *$//')"
+    case "$MARKETPLACE_ERR" in
+        *403*)
+            print_warning "Marketplace access denied. Run: aws sso login --profile prod-it01-bedrock" ;;
+        *"not found"*|*404*)
+            print_warning "Marketplace repository not found at $MARKETPLACE_URL" ;;
+        *)
+            print_warning "Could not reach the marketplace: $MARKETPLACE_ERR" ;;
+    esac
+    print_warning "Any marketplace already on this machine was left untouched, so /plugin keeps"
+    print_warning "working from its last sync. Re-run setup once the above is fixed."
+fi
 
 # ── Done ──────────────────────────────────────────────────────────────────
 echo

@@ -12,7 +12,7 @@ This installs:
 - AWS CLI, jq, Claude Code
 - AWS SSO profiles for commercial (`prod-it01-bedrock`) and GovCloud (`gc-prod-it01-bedrock`)
 - Bedrock configuration in `~/.claude/settings.json`, plus a `claude-gov` launcher
-- S3 plugin marketplace (git-remote-s3 + marketplace registration)
+- Albedo plugin marketplace, authenticated with your Bedrock SSO role
 
 After installation:
 ```bash
@@ -22,7 +22,7 @@ claude                # Launch Claude Code
 
 ## Update an Existing Setup
 
-Run this if you set up before ~July 2026, or any time you want to pull the latest
+Run this if you set up before ~September 2026, or any time you want to pull the latest
 configuration. It reconfigures everything without reinstalling Claude Code itself:
 
 ```bash
@@ -43,6 +43,12 @@ irm https://raw.githubusercontent.com/Albedo-Space-Corp/claude_code/refs/heads/m
 **Note:** The `claude_bedrock.sh` wrapper still works if you prefer it.
 
 ## What's New
+
+**v5.4.0, marketplace over CodeCommit.** The Albedo plugin marketplace is now an AWS
+CodeCommit repository, cloned over HTTPS with your existing `prod-it01-bedrock` SSO role.
+Nothing extra to install, no second account, no credential to keep. Model selection and
+Bedrock authentication are untouched. If `/plugin` stopped showing Albedo plugins, run the
+update script above or the [marketplace setup](#plugin-marketplace-existing-users).
 
 **v5.3.0, GovCloud support.** Setup now adds a GovCloud profile, writes
 `~/.claude/gov.settings.json`, and installs a `claude-gov` launcher. Bare `claude` still
@@ -113,12 +119,12 @@ powershell -ExecutionPolicy Bypass -File "$HOME\Downloads\setup_ccb.ps1"
 Already have Claude Code set up? Add the Albedo plugin marketplace:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/Albedo-Space-Corp/claude_code/refs/heads/main/setup-s3-marketplace.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/Albedo-Space-Corp/claude_code/refs/heads/main/setup-marketplace.sh)
 ```
 
 **Windows:**
 ```powershell
-irm https://raw.githubusercontent.com/Albedo-Space-Corp/claude_code/refs/heads/main/setup-s3-marketplace.ps1 | iex
+irm https://raw.githubusercontent.com/Albedo-Space-Corp/claude_code/refs/heads/main/setup-marketplace.ps1 | iex
 ```
 
 Then open Claude Code and run `/plugin` → **Update marketplace** to sync plugins.

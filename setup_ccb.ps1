@@ -397,11 +397,12 @@ if (Test-Path $claudeSettings) {
 # "model" field is ignored across files). No Haiku var: no usable Haiku in gov.
 #
 # KEEP_MARKETPLACE_ON_FAILURE: the marketplace refresh that runs in the
-# background after startup does a `git pull` on the s3:// remote. With stale AWS
-# credentials that pull fails, and the default response is a full re-clone that
-# fails the same way — every session, each git operation waiting out a 120s
-# timeout. This keeps the existing clone instead; `/plugin marketplace update`
-# still pulls with live credentials.
+# background after startup does a `git pull` on the marketplace remote, which
+# authenticates with the current AWS credentials. With stale credentials that
+# pull fails, and the default response is a full re-clone that fails the same
+# way — every session, each git operation waiting out a 120s timeout. This keeps
+# the existing clone instead; `/plugin marketplace update` still pulls with live
+# credentials.
 Write-Status "Writing GovCloud settings + claude-gov launcher..."
 
 $govSettings = Join-Path $claudeDir "gov.settings.json"
@@ -442,99 +443,111 @@ if (Select-String -Path $PROFILE -Pattern ([regex]::Escape($launcherMarker)) -Qu
     Write-Warn "Open a NEW PowerShell window (or run: . `"`$PROFILE`") before 'claude-gov' works"
 }
 
-# ── Step 7: Setup S3 plugin marketplace ───────────────────────────────
+# ── Step 7: Plugin marketplace ────────────────────────────────────────
 Write-Status "Setting up Albedo plugin marketplace..."
 
-$MarketplaceUrl = "s3://plugin-marketplace-prod-it01-$accountId/marketplace"
-$MarketplaceKey = "albedo-claude-plugin-marketplace"
-$KnownMarketplaces = Join-Path $env:USERPROFILE ".claude\plugins\known_marketplaces.json"
+# The marketplace is a CodeCommit repository cloned over HTTPS, authorized by the
+# caller's own AlbedoBedrockUsers role. Claude Code accepts only
+# https / http / ssh / scp-style / host-less file:// marketplace URLs.
+#
+# The trailing .git is mandatory: without it Claude Code classifies the URL as a
+# direct marketplace.json download, sends no credentials, and fails with an
+# opaque HTTP 401.
+$MarketplaceKey   = "albedo-claude-plugin-marketplace"
+$OfficialKey      = "claude-plugins-official"
+$MarketplaceRepo  = "albedo-plugins"
+$CodeCommitHost   = "git-codecommit.us-west-2.amazonaws.com"
+$MarketplaceUrl   = "https://$CodeCommitHost/v1/repos/$MarketplaceRepo.git"
+$PluginsDir       = Join-Path $env:USERPROFILE ".claude\plugins"
+$KnownMarketplaces = Join-Path $PluginsDir "known_marketplaces.json"
+$MarketplaceClone = Join-Path $PluginsDir "marketplaces\$MarketplaceKey"
+$NowStamp         = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
 
-# Resolve uv binary — check PATH, then known install locations
-function Find-Uv {
-    $cmd = Get-Command uv -ErrorAction SilentlyContinue
-    if ($cmd) { return $cmd.Source }
-    # uv installs to $HOME\.local\bin on Windows by default
-    $candidate = Join-Path $env:USERPROFILE ".local\bin\uv.exe"
-    if (Test-Path $candidate) { return $candidate }
-    # Older uv versions used cargo bin
-    $candidate = Join-Path $env:USERPROFILE ".cargo\bin\uv.exe"
-    if (Test-Path $candidate) { return $candidate }
-    return $null
+# Git Credential Manager may hold a SigV4 password minted by the AWS helper on an
+# earlier run. That password expires in about 15 minutes, but GCM does not know
+# that and will hand out the stale value again, producing intermittent 403s that
+# logging in again never fixes. `erase` speaks the standard git-credential
+# protocol, so it works whatever store GCM is backed by, and is a harmless no-op
+# when nothing was cached. Both binary names are tried: Git for Windows renamed
+# git-credential-manager-core to git-credential-manager in 2022.
+#
+# The trailing blank line terminates the request; without it a helper can block
+# waiting for more input.
+$EraseRequest = "protocol=https`nhost=$CodeCommitHost`n`n"
+foreach ($gcm in @("credential-manager", "credential-manager-core")) {
+    $EraseRequest | git $gcm erase 2>$null | Out-Null
 }
 
-# Ensure uv is available (needed for git-remote-s3)
-$uvBin = Find-Uv
-if (-not $uvBin) {
-    Write-Status "Installing uv (Python package manager)..."
-    irm https://astral.sh/uv/install.ps1 | iex
-    Refresh-Path
-    $uvBin = Find-Uv
-    if ($uvBin) {
-        Write-Ok "uv installed at $uvBin"
-    } else {
-        Write-Warn "uv install may have failed. Continuing..."
-    }
-}
+# Authenticate through the AWS CLI git credential helper, scoped to this one
+# repository URL so every other remote keeps its own configuration — including
+# any other CodeCommit repository, which may need a different AWS profile.
+#
+# The empty helper entry before the real one is load-bearing. Git for Windows
+# registers GCM as an unscoped credential.helper, and unscoped helpers are
+# consulted first, so a bare AWS helper for this repo would never run. Per git's
+# documentation, an empty helper value resets the inherited list up to that
+# point.
+#
+# The profile is pinned rather than inherited from the environment because
+# claude-gov runs with AWS_PROFILE set to the GovCloud profile, which cannot read
+# this commercial repository.
+#
+# UseHttpPath earns its place twice: the SigV4 signature covers the repository
+# path, and git only matches a URL-scoped section when it sends that path.
+git config --global --remove-section "credential.$MarketplaceUrl" 2>$null
 
-# Install git-remote-s3
-if (Get-Command git-remote-s3 -ErrorAction SilentlyContinue) {
-    Write-Ok "git-remote-s3 already installed"
+# PowerShell cannot reliably pass an empty-string argument to a native
+# executable: it is silently dropped from the child process command line, a
+# long-standing engine limitation. That rules out `git config --add ... ""`, so
+# the section is appended to the gitconfig file directly.
+#
+# Ask git which file it treats as the global config rather than assuming
+# ~/.gitconfig: git prefers $GIT_CONFIG_GLOBAL and falls back to an XDG location
+# when one already exists. Writing a throwaway key is the only reliable way to
+# make git name the file, because --show-origin reports nothing on an empty
+# config.
+git config --global --add albedo.configprobe 1 2>$null
+$ProbeOrigin = git config --global --list --show-origin --name-only 2>$null |
+    Where-Object { $_ -match "albedo\.configprobe" } | Select-Object -First 1
+git config --global --unset albedo.configprobe 2>$null
+# The line is `file:<path>`, a TAB, then the key name. Split on that tab rather
+# than matching up to the first whitespace: a Windows profile path routinely
+# contains spaces (C:\Users\John Doe\.gitconfig), and matching to whitespace
+# truncates it, which would append the helper to the wrong file and leave git
+# without any credential configuration for the marketplace.
+$OriginPath = $null
+if ($ProbeOrigin) {
+    $OriginField = ($ProbeOrigin -split "`t", 2)[0]
+    if ($OriginField.StartsWith("file:")) { $OriginPath = $OriginField.Substring(5) }
+}
+if ($OriginPath) {
+    $GitConfigPath = $OriginPath
 } else {
-    Write-Status "Installing git-remote-s3..."
-    if ($uvBin) {
-        & $uvBin tool install git-remote-s3
-    } elseif (Get-Command pipx -ErrorAction SilentlyContinue) {
-        pipx install git-remote-s3
-    } elseif (Get-Command pip -ErrorAction SilentlyContinue) {
-        pip install git-remote-s3
-    } else {
-        Write-Warn "Could not install git-remote-s3. Install manually: uv tool install git-remote-s3"
-    }
-
-    Refresh-Path
-    if (Get-Command git-remote-s3 -ErrorAction SilentlyContinue) {
-        Write-Ok "git-remote-s3 installed"
-    } else {
-        Write-Warn "git-remote-s3 not found on PATH. You may need to restart your terminal."
-    }
+    $GitConfigPath = if ($env:GIT_CONFIG_GLOBAL) { $env:GIT_CONFIG_GLOBAL } else { Join-Path $env:USERPROFILE ".gitconfig" }
 }
 
-# Validate S3 bucket access
-Write-Status "Validating marketplace access..."
-aws s3 ls "s3://plugin-marketplace-prod-it01-$accountId/" --profile prod-it01-bedrock 2>&1 | Out-Null
-if ($LASTEXITCODE -eq 0) {
-    Write-Ok "Marketplace bucket accessible"
+$AwsHelperCommand  = '!aws --profile prod-it01-bedrock codecommit credential-helper $@'
+$CredentialSection = "`r`n[credential `"$MarketplaceUrl`"]`r`n`thelper = `r`n`thelper = $AwsHelperCommand`r`n`tUseHttpPath = true`r`n"
+[System.IO.File]::AppendAllText($GitConfigPath, $CredentialSection, [System.Text.UTF8Encoding]::new($false))
+
+$ConfiguredHelpers = @(git config --global --get-all "credential.$MarketplaceUrl.helper")
+if ($ConfiguredHelpers.Count -eq 2 -and $ConfiguredHelpers[0] -eq "") {
+    Write-Ok "Git credential helper configured for the marketplace repository"
 } else {
-    Write-Warn "Could not access marketplace bucket. The marketplace is registered but may not sync until access is granted."
+    Write-Err "Credential helper for $MarketplaceUrl looks wrong; check $GitConfigPath"
 }
 
 # Register marketplace in known_marketplaces.json
-$PluginDir = Split-Path $KnownMarketplaces
-if (-not (Test-Path $PluginDir)) {
-    New-Item -ItemType Directory -Path $PluginDir -Force | Out-Null
-}
-
-$InstallLocation = Join-Path $env:USERPROFILE ".claude\plugins\marketplaces\$MarketplaceKey"
-
-$Entry = @{
-    source = @{ source = "git"; url = $MarketplaceUrl }
-    installLocation = $InstallLocation
-    lastUpdated = ((Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ"))
-}
-
-# Official Claude marketplace — ensure it's always present
-$OfficialEntry = @{
-    source = @{ source = "github"; repo = "anthropics/claude-plugins-official" }
-    installLocation = Join-Path $env:USERPROFILE ".claude\plugins\marketplaces\claude-plugins-official"
-    lastUpdated = ((Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ"))
+if (-not (Test-Path $PluginsDir)) {
+    New-Item -ItemType Directory -Path $PluginsDir -Force | Out-Null
 }
 
 if (Test-Path $KnownMarketplaces) {
     try {
-        $existing = Get-Content $KnownMarketplaces -Raw | ConvertFrom-Json
+        $existingKm = Get-Content $KnownMarketplaces -Raw | ConvertFrom-Json
         # Build hashtable from PSCustomObject (PS 5.1 compat — no -AsHashtable)
         $Data = @{}
-        foreach ($prop in $existing.PSObject.Properties) {
+        foreach ($prop in $existingKm.PSObject.Properties) {
             $Data[$prop.Name] = $prop.Value
         }
     } catch {
@@ -544,14 +557,91 @@ if (Test-Path $KnownMarketplaces) {
     $Data = @{}
 }
 
-if (-not $Data.ContainsKey("claude-plugins-official")) {
-    $Data["claude-plugins-official"] = $OfficialEntry
+# Merged rather than replaced so a hand-set installLocation, and any field Claude
+# Code itself added, survive.
+$InstallLocation = $MarketplaceClone
+if ($Data.ContainsKey($MarketplaceKey) -and $Data[$MarketplaceKey].installLocation) {
+    $InstallLocation = $Data[$MarketplaceKey].installLocation
 }
-$Data[$MarketplaceKey] = $Entry
 
-$jsonStr = $Data | ConvertTo-Json -Depth 4
+$Data[$MarketplaceKey] = @{
+    source          = @{ source = "git"; url = $MarketplaceUrl }
+    installLocation = $InstallLocation
+    lastUpdated     = $NowStamp
+}
+
+# Official Claude marketplace — ensure it's always present
+if (-not $Data.ContainsKey($OfficialKey)) {
+    $Data[$OfficialKey] = @{
+        source          = @{ source = "github"; repo = "anthropics/claude-plugins-official" }
+        installLocation = Join-Path $PluginsDir "marketplaces\$OfficialKey"
+        lastUpdated     = $NowStamp
+    }
+}
+
+$jsonStr = $Data | ConvertTo-Json -Depth 6
 Write-Utf8NoBom -Path $KnownMarketplaces -Content $jsonStr
 Write-Ok "Plugin marketplace registered"
+
+# A marketplace may also be declared in settings.json. When that declaration and
+# the registration above disagree, Claude Code refuses the marketplace outright:
+# "its network source differs from the one declared for it in settings".
+if (Test-Path $claudeSettings) {
+    $settingsForMarketplace = Get-Content $claudeSettings -Raw | ConvertFrom-Json
+    $extraEntry = $settingsForMarketplace.extraKnownMarketplaces.$MarketplaceKey
+    if ($extraEntry -and -not ($extraEntry.source.source -eq "git" -and $extraEntry.source.url -eq $MarketplaceUrl)) {
+        $sd = @{}
+        foreach ($prop in $settingsForMarketplace.PSObject.Properties) { $sd[$prop.Name] = $prop.Value }
+        $extras = @{}
+        foreach ($prop in $settingsForMarketplace.extraKnownMarketplaces.PSObject.Properties) { $extras[$prop.Name] = $prop.Value }
+        $entryData = @{}
+        foreach ($prop in $extras[$MarketplaceKey].PSObject.Properties) { $entryData[$prop.Name] = $prop.Value }
+        $entryData["source"] = @{ source = "git"; url = $MarketplaceUrl }
+        $extras[$MarketplaceKey] = $entryData
+        $sd["extraKnownMarketplaces"] = $extras
+        # Depth is at the maximum: ConvertTo-Json silently replaces anything
+        # deeper with a flattened string, which would corrupt nested hook or
+        # mcpServers configuration.
+        Write-Utf8NoBom -Path $claudeSettings -Content ($sd | ConvertTo-Json -Depth 100)
+        Write-Ok "settings.json marketplace declaration updated to match"
+    }
+}
+
+# Step 5 logged in, so a failure here is a real problem rather than a missing
+# session; report the specific reason and carry on.
+#
+# Verification gates the cleanup below it. An existing checkout is a working
+# marketplace even when its remote is unreachable: Claude Code reads plugins from
+# the working tree and needs the remote only to update. Discarding it before the
+# replacement is proven would turn "stale but usable" into "no marketplace at
+# all".
+Write-Status "Verifying marketplace access..."
+$lsRemote = git ls-remote $MarketplaceUrl 2>&1
+if ($LASTEXITCODE -eq 0) {
+    Write-Ok "Marketplace repository reachable"
+
+    # A checkout whose origin is any other URL cannot pull from the marketplace.
+    # The replacement is known good now, so drop it and let Claude Code clone
+    # fresh on launch.
+    if (Test-Path $MarketplaceClone) {
+        $OldOrigin = (git -C $MarketplaceClone remote get-url origin 2>$null)
+        if ($OldOrigin -ne $MarketplaceUrl) {
+            Remove-Item $MarketplaceClone -Recurse -Force
+            Write-Ok "Removed a stale marketplace clone (origin was $OldOrigin)"
+        }
+    }
+} else {
+    $lsErr = ($lsRemote | Out-String).Trim()
+    if ($lsErr -match "403") {
+        Write-Warn "Marketplace access denied. Run: aws sso login --profile prod-it01-bedrock"
+    } elseif ($lsErr -match "(?i)repository.*not found") {
+        Write-Warn "Marketplace repository not found at $MarketplaceUrl"
+    } else {
+        Write-Warn "Could not reach the marketplace: $lsErr"
+    }
+    Write-Warn "Any marketplace already on this machine was left untouched, so /plugin keeps"
+    Write-Warn "working from its last sync. Re-run setup once the above is fixed."
+}
 
 # ── Verification ─────────────────────────────────────────────────────
 Write-Host ""
@@ -607,13 +697,6 @@ if ((Test-Path $claudeSettings) -and (Select-String -Path $claudeSettings -Patte
     Write-Ok "Claude Code Bedrock settings: configured"
 } else {
     Write-Err "Claude Code Bedrock settings: NOT FOUND"
-}
-
-# git-remote-s3
-if (Get-Command git-remote-s3 -ErrorAction SilentlyContinue) {
-    Write-Ok "git-remote-s3: installed"
-} else {
-    Write-Warn "git-remote-s3: NOT FOUND (needed for plugin marketplace)"
 }
 
 # Plugin marketplace
