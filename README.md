@@ -1,6 +1,57 @@
-# Claude Code with AWS Bedrock at Albedo
+# Claude Code and Codex with AWS Bedrock at Albedo
 
 Run [Claude Code](https://claude.ai/claude-code) using AWS Bedrock infrastructure at Albedo (ITAR compliant).
+
+## Codex setup
+
+**macOS or Ubuntu/WSL:**
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/Albedo-Space-Corp/claude_code/refs/heads/main/setup_codex.sh)
+```
+
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/Albedo-Space-Corp/claude_code/refs/heads/main/setup_codex.ps1 | iex
+```
+
+Setup installs missing tools (AWS CLI, Codex, and uv for the configuration helper),
+configures the same `prod-it01-bedrock` SSO profile as Claude, and registers the
+Albedo plugin marketplace. Windows and Ubuntu also install Git when needed;
+macOS requires Git (install Apple's Command Line Tools if prompted).
+The setup baseline is Codex CLI 0.154.0+ and AWS CLI 2.9.0+; older installations
+must be updated before configuration is changed.
+
+Restart Codex or your IDE after setup. Run `codex`, confirm `amazon-bedrock` in
+`/status`, and choose an available `openai.gpt-*` model with `/model`.
+Browse the Albedo marketplace with `/plugins`.
+
+The native provider uses commercial Bedrock in `us-west-2` and your
+`AlbedoBedrockUsers` role. No OpenAI API key or ChatGPT sign-in is needed.
+This installer configures commercial Bedrock only. Fast Mode is unavailable on
+the current Bedrock connection.
+See [OpenAI's Bedrock guide](https://learn.chatgpt.com/docs/amazon-bedrock)
+for supported features.
+
+`codex-gov` is a planned extension pending GPT model and Codex connection support
+in GovCloud. It can use a separate Codex configuration profile selecting
+`gc-prod-it01-bedrock` and `us-gov-west-1`, while retaining the commercial default
+and shared setup helper. Setup preserves any existing GovCloud AWS profile;
+it does not install an inactive GovCloud launcher.
+
+Re-run the same installer to update configuration. Existing Codex installs are
+kept; use `codex update` to update the CLI. Changed configuration files are backed
+up beside the originals. Both configuration files are staged before replacement;
+if replacement fails, setup restores the original files. If restoration also fails,
+the error identifies the backup for manual recovery. Other AWS profiles, Codex instructions, permissions,
+MCP servers, and enabled plugins are preserved. Setup replaces the Bedrock provider
+and Albedo marketplace entries, turns Fast Mode off, and clears incompatible
+ChatGPT model selections. Existing `openai.*` model selections are kept.
+`AWS_CONFIG_FILE` and `CODEX_HOME` are honored when set.
+
+If SSO expires, run `aws sso login --profile prod-it01-bedrock`.
+If Codex still uses an API key, remove `AWS_BEARER_TOKEN_BEDROCK` from its
+environment (including `~/.codex/.env`) and restart it. An explicitly selected
+Codex configuration profile can override the defaults written by setup.
 
 ## Quick Start (New Users)
 
