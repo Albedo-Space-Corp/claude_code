@@ -71,3 +71,4 @@ try {
 Write-Host 'Setup complete. Restart Codex or your IDE, then run codex.'
 Write-Host 'Use /status to confirm amazon-bedrock and /model to choose a model.'
 Write-Host 'Use /plugins to browse the Albedo marketplace.'
+Write-Host 'For GovCloud Bedrock: aws sso login --profile gc-prod-it01-bedrock, then codex --profile gov.'

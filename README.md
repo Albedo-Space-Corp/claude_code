@@ -15,8 +15,8 @@ irm https://raw.githubusercontent.com/Albedo-Space-Corp/claude_code/refs/heads/m
 ```
 
 Setup installs missing tools (AWS CLI, Codex, and uv for the configuration helper),
-configures the same `prod-it01-bedrock` SSO profile as Claude, and registers the
-Albedo plugin marketplace. Windows and Ubuntu also install Git when needed;
+configures the same `prod-it01-bedrock` and `gc-prod-it01-bedrock` SSO profiles as
+Claude, and registers the Albedo plugin marketplace. Windows and Ubuntu also install Git when needed;
 macOS requires Git (install Apple's Command Line Tools if prompted).
 The setup baseline is Codex CLI 0.154.0+ and AWS CLI 2.9.0+; older installations
 must be updated before configuration is changed.
@@ -27,20 +27,36 @@ Browse the Albedo marketplace with `/plugins`.
 
 The native provider uses commercial Bedrock in `us-west-2` and your
 `AlbedoBedrockUsers` role. No OpenAI API key or ChatGPT sign-in is needed.
-This installer configures commercial Bedrock only. Fast Mode is unavailable on
-the current Bedrock connection.
+Fast Mode is unavailable on the current Bedrock connection.
 See [OpenAI's Bedrock guide](https://learn.chatgpt.com/docs/amazon-bedrock)
 for supported features.
 
-`codex-gov` is a planned extension pending GPT model and Codex connection support
-in GovCloud. It can use a separate Codex configuration profile selecting
-`gc-prod-it01-bedrock` and `us-gov-west-1`, while retaining the commercial default
-and shared setup helper. Setup preserves any existing GovCloud AWS profile;
-it does not install an inactive GovCloud launcher.
+### Codex on GovCloud
+
+```bash
+aws sso login --profile gc-prod-it01-bedrock
+codex --profile gov
+```
+
+`--profile gov` layers `~/.codex/gov.config.toml` over your normal config, so
+plugins, instructions, and permissions carry over; only the Bedrock provider
+changes, to GovCloud Mantle in `us-gov-west-1` as your GovCloud
+`AlbedoBedrockUsers` role. Plain `codex` stays commercial. It composes with other
+flags (`codex --profile gov exec ...`). GovCloud offers `openai.gpt-5.6-luna`,
+`openai.gpt-5.6-terra`, and `openai.gpt-5.4`. The gov profile defaults to Luna
+rather than inheriting your commercial model, since some commercial models (Sol)
+aren't in GovCloud. Set your own `model` in `gov.config.toml` and setup keeps it.
+Setup moves an old inline `[profiles.gov]` table from `config.toml` into
+`gov.config.toml`, since Codex refuses `--profile gov` while it's there.
+
+The provider needs the endpoint set explicitly
+(`https://bedrock-mantle.us-gov-west-1.api.aws/openai/v1`), because it derives
+only commercial endpoints from its region. It must be the `/openai/v1` path: the
+`/v1` path rejects the request body Codex sends.
 
 Re-run the same installer to update configuration. Existing Codex installs are
 kept; use `codex update` to update the CLI. Changed configuration files are backed
-up beside the originals. Both configuration files are staged before replacement;
+up beside the originals. All configuration files are staged before replacement;
 if replacement fails, setup restores the original files. If restoration also fails,
 the error identifies the backup for manual recovery. Other AWS profiles, Codex instructions, permissions,
 MCP servers, and enabled plugins are preserved. Setup replaces the Bedrock provider
@@ -48,7 +64,8 @@ and Albedo marketplace entries, turns Fast Mode off, and clears incompatible
 ChatGPT model selections. Existing `openai.*` model selections are kept.
 `AWS_CONFIG_FILE` and `CODEX_HOME` are honored when set.
 
-If SSO expires, run `aws sso login --profile prod-it01-bedrock`.
+If SSO expires, run `aws sso login --profile prod-it01-bedrock` (or
+`gc-prod-it01-bedrock` for GovCloud).
 If Codex still uses an API key, remove `AWS_BEARER_TOKEN_BEDROCK` from its
 environment (including `~/.codex/.env`) and restart it. An explicitly selected
 Codex configuration profile can override the defaults written by setup.

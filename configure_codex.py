@@ -27,18 +27,43 @@ sso_account_id = 188343044386
 sso_role_name = AlbedoBedrockUsers
 region = us-west-2
 output = json
+
+[sso-session albedo-gc]
+sso_start_url = https://start.us-gov-home.awsapps.com/directory/albedo-gc
+sso_region = us-gov-west-1
+sso_registration_scopes = sso:account:access
+
+[profile gc-prod-it01-bedrock]
+sso_session = albedo-gc
+sso_account_id = 479469912381
+sso_role_name = AlbedoBedrockUsers
+region = us-gov-west-1
+output = json
 """
 MARKETPLACE_URL = "https://git-codecommit.us-west-2.amazonaws.com/v1/repos/albedo-plugins.git"
 
+# `codex --profile gov` layers gov.config.toml over config.toml. The gov Mantle
+# endpoint must be set explicitly (the provider derives only commercial
+# endpoints from its region), and on the /openai/v1 path: /v1 rejects the
+# request body Codex sends.
+GOV_PROVIDER = {
+    "base_url": "https://bedrock-mantle.us-gov-west-1.api.aws/openai/v1",
+    "aws": {"profile": "gc-prod-it01-bedrock", "region": "us-gov-west-1"},
+}
+# The gov overlay inherits model selections from config.toml, and the GovCloud
+# catalog is smaller (no GPT-5.6 Sol, for one), so the overlay pins its own.
+GOV_MODEL = "openai.gpt-5.6-luna"
+
 
 def aws_settings(text):
-    """Replace only the two commercial sections, as in the Claude installers."""
+    """Replace the four Albedo sections, as setup_ccb.sh does, keeping the rest."""
     remainder = []
     skip = False
     for line in text.splitlines(keepends=True):
         if re.match(r"\s*\[", line):
             skip = bool(re.match(
-                r"\s*\[(?:profile\s+prod-it01-bedrock|sso-session\s+albedo-commercial)\]\s*(?:[#;].*)?$",
+                r"\s*\[(?:profile\s+(?:prod-it01-bedrock|gc-prod-it01-bedrock)"
+                r"|sso-session\s+(?:albedo-commercial|albedo-gc))\]\s*(?:[#;].*)?$",
                 line,
             ))
         if not skip or re.match(r"\s*[#;]", line):
@@ -51,7 +76,22 @@ def aws_settings(text):
 
 
 def codex_settings(text):
+    """Return the commercial config.toml text and any legacy gov profile table.
+
+    Codex refuses `--profile gov` while config.toml holds a `[profiles.gov]`
+    table or a `profile = "gov"` selector, so both are removed here and the
+    table's contents move into gov.config.toml.
+    """
     config = tomlkit.parse(text)
+    legacy_gov = {}
+    profiles = config.get("profiles")
+    if profiles is not None and "gov" in profiles:
+        legacy_gov = profiles["gov"].unwrap()
+        del profiles["gov"]
+        if not profiles:
+            del config["profiles"]
+    if config.get("profile") == "gov":
+        del config["profile"]
     config["model_provider"] = "amazon-bedrock"
     config["service_tier"] = "default"
     # ChatGPT model IDs aren't Bedrock IDs. Let the native picker choose its
@@ -63,7 +103,8 @@ def codex_settings(text):
     if "default_subagent_model" in agents and not str(agents["default_subagent_model"]).startswith("openai."):
         del agents["default_subagent_model"]
     providers = config.setdefault("model_providers", tomlkit.table())
-    # The built-in provider accepts only AWS profile/region overrides.
+    # Commercial needs only the AWS profile and region; the provider derives its
+    # Mantle endpoint from the region.
     bedrock = {"aws": {"profile": "prod-it01-bedrock", "region": "us-west-2"}}
     if providers.get("amazon-bedrock") != bedrock:
         providers["amazon-bedrock"] = bedrock
@@ -71,6 +112,44 @@ def codex_settings(text):
     marketplace = {"source_type": "git", "source": MARKETPLACE_URL}
     if marketplaces.get("albedo-claude-plugin-marketplace") != marketplace:
         marketplaces["albedo-claude-plugin-marketplace"] = marketplace
+    return tomlkit.dumps(config), legacy_gov
+
+
+def _fill_missing(target, source):
+    """Copy keys from source that target lacks, merging nested tables.
+
+    Existing values in target win, so a user's gov.config.toml is never
+    overwritten; nested tables such as [mcp_servers] merge key by key so no
+    legacy entry is dropped.
+    """
+    for key, value in source.items():
+        if key not in target:
+            target[key] = value
+        elif isinstance(value, dict) and isinstance(target[key], dict):
+            _fill_missing(target[key], value)
+
+
+def gov_codex_settings(text, base_text, legacy_gov=None):
+    """Set the GovCloud provider overlay, keeping anything else the user added.
+
+    Keys from a migrated legacy `[profiles.gov]` table fill in only what the
+    file doesn't already set. Model selections the overlay would inherit from
+    config.toml are pinned to a gov-served model unless the user chose one here.
+    """
+    config = tomlkit.parse(text)
+    _fill_missing(config, legacy_gov or {})
+    base = tomlkit.parse(base_text)
+    if "model" not in config:
+        config["model"] = GOV_MODEL
+    if "review_model" in base and "review_model" not in config:
+        config["review_model"] = GOV_MODEL
+    if "default_subagent_model" in base.get("agents", {}):
+        agents = config.setdefault("agents", tomlkit.table())
+        if "default_subagent_model" not in agents:
+            agents["default_subagent_model"] = GOV_MODEL
+    providers = config.setdefault("model_providers", tomlkit.table())
+    if providers.get("amazon-bedrock") != GOV_PROVIDER:
+        providers["amazon-bedrock"] = GOV_PROVIDER
     return tomlkit.dumps(config)
 
 
@@ -122,12 +201,16 @@ def write_configs(configs):
 
 
 def configure(aws_config, codex_config):
-    aws_text = aws_config.read_text(encoding="utf-8-sig") if aws_config.exists() else ""
-    codex_text = codex_config.read_text(encoding="utf-8-sig") if codex_config.exists() else ""
-    # Parse both before writing, so invalid TOML leaves AWS configuration alone.
-    new_aws = aws_settings(aws_text)
-    new_codex = codex_settings(codex_text)
-    write_configs(((aws_config, new_aws), (codex_config, new_codex)))
+    gov_config = codex_config.with_name("gov.config.toml")
+
+    def read(path):
+        return path.read_text(encoding="utf-8-sig") if path.exists() else ""
+
+    # Parse all three before writing, so invalid TOML leaves AWS configuration alone.
+    new_aws = aws_settings(read(aws_config))
+    new_codex, legacy_gov = codex_settings(read(codex_config))
+    new_gov = gov_codex_settings(read(gov_config), new_codex, legacy_gov)
+    write_configs(((aws_config, new_aws), (codex_config, new_codex), (gov_config, new_gov)))
 
 
 def configure_git():
