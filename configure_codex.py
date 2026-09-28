@@ -50,9 +50,46 @@ GOV_PROVIDER = {
     "base_url": "https://bedrock-mantle.us-gov-west-1.api.aws/openai/v1",
     "aws": {"profile": "gc-prod-it01-bedrock", "region": "us-gov-west-1"},
 }
-# The gov overlay inherits model selections from config.toml, and the GovCloud
-# catalog is smaller (no GPT-5.6 Sol, for one), so the overlay pins its own.
-GOV_MODEL = "openai.gpt-5.6-luna"
+# Bedrock model IDs are literals: the provider has no `opus`/`sonnet`-style
+# aliases to resolve a tier at request time, so the default tier is whatever is
+# written here. Each partition gets the strongest Mantle model it serves. Within
+# a generation the tiers rank Sol > Terra > Luna, and GovCloud carries neither
+# Sol nor any GPT-6, so the two partitions cannot share a pin.
+#
+# SUPERSEDED holds every model this installer has previously written as that
+# partition's default. Setup replaces one it finds, so bumping a pin reaches
+# installations that already exist; a model outside both lists was chosen by the
+# user and is left alone. Without the lists a pin is a one-shot initial value
+# that can never move, since the first run makes every later run a no-op. When a
+# pin changes, append the old value here in the same commit.
+COMMERCIAL_MODEL = "openai.gpt-6-astra"
+SUPERSEDED_COMMERCIAL_MODELS = ()
+GOV_MODEL = "openai.gpt-5.6-terra"
+SUPERSEDED_GOV_MODELS = ("openai.gpt-5.6-luna",)
+
+
+def pin_model(config, key, pin, superseded, add=True):
+    """Set `key` to `pin`, replacing a default this installer used to write.
+
+    Clearing a superseded value is unconditional, because a stale one left in an
+    overlay outranks the current pin for that key. `add` is false where the
+    overlay has no base selection to shadow: the key is cleared and left absent
+    so it follows `model`.
+    """
+    if key in config and str(config[key]) in superseded:
+        del config[key]
+    if add and key not in config:
+        config[key] = pin
+
+
+def model_selections(text):
+    """Return the model choices a Codex config makes, for reporting changes."""
+    config = tomlkit.parse(text)
+    picked = {key: str(config[key]) for key in ("model", "review_model") if key in config}
+    agents = config.get("agents", {})
+    if "default_subagent_model" in agents:
+        picked["agents.default_subagent_model"] = str(agents["default_subagent_model"])
+    return picked
 
 
 def aws_settings(text):
@@ -94,14 +131,16 @@ def codex_settings(text):
         del config["profile"]
     config["model_provider"] = "amazon-bedrock"
     config["service_tier"] = "default"
-    # ChatGPT model IDs aren't Bedrock IDs. Let the native picker choose its
-    # default, while keeping any model the user already selected on Bedrock.
+    # ChatGPT model IDs aren't Bedrock IDs, so drop any that Bedrock cannot
+    # serve while keeping a model the user already selected on Bedrock.
     for key in ("model", "review_model"):
         if key in config and not str(config[key]).startswith("openai."):
             del config[key]
     agents = config.get("agents", {})
     if "default_subagent_model" in agents and not str(agents["default_subagent_model"]).startswith("openai."):
         del agents["default_subagent_model"]
+    # Only `model` is pinned; review and subagent selections fall back to it.
+    pin_model(config, "model", COMMERCIAL_MODEL, SUPERSEDED_COMMERCIAL_MODELS)
     providers = config.setdefault("model_providers", tomlkit.table())
     # Commercial needs only the AWS profile and region; the provider derives its
     # Mantle endpoint from the region.
@@ -134,19 +173,25 @@ def gov_codex_settings(text, base_text, legacy_gov=None):
 
     Keys from a migrated legacy `[profiles.gov]` table fill in only what the
     file doesn't already set. Model selections the overlay would inherit from
-    config.toml are pinned to a gov-served model unless the user chose one here.
+    config.toml are pinned to a gov-served model unless the user chose one here;
+    a superseded default this installer wrote counts as unchosen.
     """
     config = tomlkit.parse(text)
     _fill_missing(config, legacy_gov or {})
     base = tomlkit.parse(base_text)
-    if "model" not in config:
-        config["model"] = GOV_MODEL
-    if "review_model" in base and "review_model" not in config:
-        config["review_model"] = GOV_MODEL
-    if "default_subagent_model" in base.get("agents", {}):
+    pin_model(config, "model", GOV_MODEL, SUPERSEDED_GOV_MODELS)
+    pin_model(config, "review_model", GOV_MODEL, SUPERSEDED_GOV_MODELS,
+              add="review_model" in base)
+    base_agents = base.get("agents", {})
+    agents = config.get("agents")
+    if "default_subagent_model" in base_agents:
         agents = config.setdefault("agents", tomlkit.table())
-        if "default_subagent_model" not in agents:
-            agents["default_subagent_model"] = GOV_MODEL
+    if agents is not None:
+        # A table the clear empties is left in place. tomlkit reports a
+        # comment-only table as empty, so dropping empty tables would delete
+        # comments from an `[agents]` table setup never touched.
+        pin_model(agents, "default_subagent_model", GOV_MODEL, SUPERSEDED_GOV_MODELS,
+                  add="default_subagent_model" in base_agents)
     providers = config.setdefault("model_providers", tomlkit.table())
     if providers.get("amazon-bedrock") != GOV_PROVIDER:
         providers["amazon-bedrock"] = GOV_PROVIDER
@@ -207,10 +252,20 @@ def configure(aws_config, codex_config):
         return path.read_text(encoding="utf-8-sig") if path.exists() else ""
 
     # Parse all three before writing, so invalid TOML leaves AWS configuration alone.
+    old_codex, old_gov = read(codex_config), read(gov_config)
     new_aws = aws_settings(read(aws_config))
-    new_codex, legacy_gov = codex_settings(read(codex_config))
-    new_gov = gov_codex_settings(read(gov_config), new_codex, legacy_gov)
+    new_codex, legacy_gov = codex_settings(old_codex)
+    new_gov = gov_codex_settings(old_gov, new_codex, legacy_gov)
     write_configs(((aws_config, new_aws), (codex_config, new_codex), (gov_config, new_gov)))
+    # Advancing a superseded default replaces a value the user may have set by
+    # hand, so report it rather than let it be a surprise. Reported after the
+    # write, so a rollback never announces a change that did not land.
+    for path, before, after in ((codex_config, old_codex, new_codex), (gov_config, old_gov, new_gov)):
+        before, after = model_selections(before), model_selections(after)
+        for key in sorted(before.keys() | after.keys()):
+            was, now = before.get(key), after.get(key)
+            if was is not None and was != now:
+                print(f"{path.name}: {key} was {was}, now {now or 'unset (follows model)'}")
 
 
 def configure_git():

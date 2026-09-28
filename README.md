@@ -21,8 +21,10 @@ macOS requires Git (install Apple's Command Line Tools if prompted).
 The setup baseline is Codex CLI 0.154.0+ and AWS CLI 2.9.0+; older installations
 must be updated before configuration is changed.
 
-Restart Codex or your IDE after setup. Run `codex`, confirm `amazon-bedrock` in
-`/status`, and choose an available `openai.gpt-*` model with `/model`.
+Restart Codex or your IDE after setup. Run `codex` and confirm `amazon-bedrock`
+in `/status`. The default model is `openai.gpt-6-astra`, the strongest Bedrock
+serves in commercial; `/model` lists the rest. A model you already selected is
+kept, so the default only applies to a fresh configuration.
 Browse the Albedo marketplace with `/plugins`.
 
 The native provider uses commercial Bedrock in `us-west-2` and your
@@ -42,10 +44,14 @@ codex --profile gov
 plugins, instructions, and permissions carry over; only the Bedrock provider
 changes, to GovCloud Mantle in `us-gov-west-1` as your GovCloud
 `AlbedoBedrockUsers` role. Plain `codex` stays commercial. It composes with other
-flags (`codex --profile gov exec ...`). GovCloud offers `openai.gpt-5.6-luna`,
-`openai.gpt-5.6-terra`, and `openai.gpt-5.4`. The gov profile defaults to Luna
-rather than inheriting your commercial model, since some commercial models (Sol)
-aren't in GovCloud. Set your own `model` in `gov.config.toml` and setup keeps it.
+flags (`codex --profile gov exec ...`). GovCloud offers `openai.gpt-5.6-terra`,
+`openai.gpt-5.6-luna`, and `openai.gpt-5.4`. The gov profile defaults to Terra,
+the strongest of those, rather than inheriting your commercial model, since
+GPT-6 Astra isn't in GovCloud. Set your own `model` in `gov.config.toml` and
+setup keeps it, unless it matches a default an earlier version of setup wrote:
+those advance to the current one, so a new model reaches installations that
+already exist. Setup prints every model selection it changes, and backs the file
+up first, so re-pick yours if an advance catches a model you wanted.
 Setup moves an old inline `[profiles.gov]` table from `config.toml` into
 `gov.config.toml`, since Codex refuses `--profile gov` while it's there.
 
@@ -61,7 +67,8 @@ if replacement fails, setup restores the original files. If restoration also fai
 the error identifies the backup for manual recovery. Other AWS profiles, Codex instructions, permissions,
 MCP servers, and enabled plugins are preserved. Setup replaces the Bedrock provider
 and Albedo marketplace entries, turns Fast Mode off, and clears incompatible
-ChatGPT model selections. Existing `openai.*` model selections are kept.
+ChatGPT model selections. Existing `openai.*` model selections are kept; a
+configuration left without one gets the partition's default.
 `AWS_CONFIG_FILE` and `CODEX_HOME` are honored when set.
 
 If SSO expires, run `aws sso login --profile prod-it01-bedrock` (or
