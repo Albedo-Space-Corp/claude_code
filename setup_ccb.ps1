@@ -40,6 +40,96 @@ function Write-Utf8NoBom {
     [System.IO.File]::WriteAllText($Path, $Content, [System.Text.UTF8Encoding]::new($false))
 }
 
+function Invoke-Native {
+    # Every native command whose streams are redirected goes through here, and
+    # returns its exit code plus output rather than throwing.
+    #
+    # Under the script-level $ErrorActionPreference = "Stop", Windows PowerShell 5.1
+    # turns a redirected native stderr write into a terminating NativeCommandError.
+    # Both redirection forms do it: `2>$null` and `2>&1`. Only a bare, unredirected
+    # call is safe, because its stderr goes straight to the console without becoming
+    # an ErrorRecord. That is backwards from the intuition the redirections were
+    # written with, and it means each one fired on exactly the failure path it was
+    # added to detect: an absent credential helper, a config section that is not
+    # there yet, an unreachable marketplace, a lapsed SSO session. Relaxing the
+    # preference to this function's scope is what keeps those recoverable.
+    #
+    # PowerShell 7 does not behave this way ($PSNativeCommandUseErrorActionPreference
+    # defaults to false), so CI on the pwsh image cannot catch a regression here by
+    # running the code. tests/test_setup_ccb.ps1 checks the shape statically.
+    #
+    # The argument list is one explicit array rather than remaining arguments:
+    # ValueFromRemainingArguments silently drops the first bare token, so
+    # `Invoke-Native git config --global ...` would hand git `--global ...` and earn
+    # a usage error.
+    param(
+        [Parameter(Mandatory = $true)][string]$Command,
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [string]$StandardInput,
+        # Keep stderr in the returned output, for callers that report the message.
+        [switch]$CaptureStderr
+    )
+    $ErrorActionPreference = "Continue"
+    if ($CaptureStderr) {
+        $Output = @(& $Command @Arguments 2>&1 | ForEach-Object { "$_" })
+    } elseif ($PSBoundParameters.ContainsKey("StandardInput")) {
+        $Output = @($StandardInput | & $Command @Arguments 2>$null)
+    } else {
+        $Output = @(& $Command @Arguments 2>$null)
+    }
+    return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $Output }
+}
+
+function Expand-GitQuotedPath {
+    # git C-style quotes a config origin path when it holds a character that needs
+    # escaping. On Windows every backslash qualifies, so a quoted path is the norm
+    # whenever GIT_CONFIG_GLOBAL is set, and a non-ASCII character arrives as one
+    # \nnn octal escape per UTF-8 byte (Jose with an acute e becomes Jos\303\251).
+    # Decoding to bytes and reading them back as UTF-8 recovers the original name.
+    #
+    # Stripping backslashes with a regex is not enough: that turns \303\251 into the
+    # literal characters 303251, and the credential section then lands in a path git
+    # never reads, leaving the marketplace unauthenticated.
+    #
+    # Asking git to print the path unescaped instead (GIT_EDITOR=echo git config
+    # --global --edit) is worse here rather than better: that emits raw UTF-8, which
+    # Windows PowerShell 5.1 decodes with the console code page and mangles. The
+    # escaped form is pure ASCII and survives any code page.
+    param([Parameter(Mandatory = $true)][string]$Quoted)
+    if ($Quoted.Length -lt 2 -or -not ($Quoted.StartsWith('"') -and $Quoted.EndsWith('"'))) {
+        return $Quoted
+    }
+    $Body = $Quoted.Substring(1, $Quoted.Length - 2)
+    $Bytes = New-Object System.Collections.Generic.List[byte]
+    $Simple = @{ 'a' = 7; 'b' = 8; 'f' = 12; 'n' = 10; 'r' = 13; 't' = 9; 'v' = 11; '\' = 92; '"' = 34 }
+    $i = 0
+    while ($i -lt $Body.Length) {
+        if ($Body[$i] -ne '\') {
+            $Bytes.AddRange([System.Text.Encoding]::UTF8.GetBytes([string]$Body[$i]))
+            $i++
+            continue
+        }
+        $i++
+        if ($i -ge $Body.Length) { break }
+        $Next = [string]$Body[$i]
+        if ($Simple.ContainsKey($Next)) {
+            $Bytes.Add([byte]$Simple[$Next])
+            $i++
+        } elseif ($Next -match '^[0-7]$') {
+            $Octal = ""
+            while ($i -lt $Body.Length -and $Octal.Length -lt 3 -and [string]$Body[$i] -match '^[0-7]$') {
+                $Octal += $Body[$i]
+                $i++
+            }
+            $Bytes.Add([Convert]::ToByte($Octal, 8))
+        } else {
+            $Bytes.AddRange([System.Text.Encoding]::UTF8.GetBytes($Next))
+            $i++
+        }
+    }
+    return [System.Text.Encoding]::UTF8.GetString($Bytes.ToArray())
+}
+
 # ── Banner ───────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "===========================================================" -ForegroundColor Green
@@ -118,7 +208,7 @@ if (Test-Path $gitBash) {
 Write-Status "Checking for AWS CLI..."
 
 if (Get-Command aws -ErrorAction SilentlyContinue) {
-    Write-Ok "AWS CLI already installed ($(aws --version 2>&1))"
+    Write-Ok "AWS CLI already installed ($((Invoke-Native aws @("--version") -CaptureStderr).Output -join ' '))"
 } else {
     Write-Status "Installing AWS CLI via winget..."
     # --source winget: see Git install above — avoids the msstore cert-pinning
@@ -468,14 +558,16 @@ $NowStamp         = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.f
 # that and will hand out the stale value again, producing intermittent 403s that
 # logging in again never fixes. `erase` speaks the standard git-credential
 # protocol, so it works whatever store GCM is backed by, and is a harmless no-op
-# when nothing was cached. Both binary names are tried: Git for Windows renamed
-# git-credential-manager-core to git-credential-manager in 2022.
+# when nothing was cached. Both binary names are tried because Git for Windows
+# renamed git-credential-manager-core to git-credential-manager in 2022, so on
+# any current Git the second name is absent and git reports it as an unknown
+# command. That is expected, which is why these go through Invoke-Git.
 #
 # The trailing blank line terminates the request; without it a helper can block
 # waiting for more input.
 $EraseRequest = "protocol=https`nhost=$CodeCommitHost`n`n"
 foreach ($gcm in @("credential-manager", "credential-manager-core")) {
-    $EraseRequest | git $gcm erase 2>$null | Out-Null
+    $null = Invoke-Native -Command git -StandardInput $EraseRequest -Arguments @($gcm, "erase")
 }
 
 # Authenticate through the AWS CLI git credential helper, scoped to this one
@@ -494,7 +586,7 @@ foreach ($gcm in @("credential-manager", "credential-manager-core")) {
 #
 # UseHttpPath earns its place twice: the SigV4 signature covers the repository
 # path, and git only matches a URL-scoped section when it sends that path.
-git config --global --remove-section "credential.$MarketplaceUrl" 2>$null
+$null = Invoke-Native git @("config", "--global", "--remove-section", "credential.$MarketplaceUrl")
 
 # PowerShell cannot reliably pass an empty-string argument to a native
 # executable: it is silently dropped from the child process command line, a
@@ -506,10 +598,10 @@ git config --global --remove-section "credential.$MarketplaceUrl" 2>$null
 # when one already exists. Writing a throwaway key is the only reliable way to
 # make git name the file, because --show-origin reports nothing on an empty
 # config.
-git config --global --add albedo.configprobe 1 2>$null
-$ProbeOrigin = git config --global --list --show-origin --name-only 2>$null |
+$null = Invoke-Native git @("config", "--global", "--add", "albedo.configprobe", "1")
+$ProbeOrigin = (Invoke-Native git @("config", "--global", "--list", "--show-origin", "--name-only")).Output |
     Where-Object { $_ -match "albedo\.configprobe" } | Select-Object -First 1
-git config --global --unset albedo.configprobe 2>$null
+$null = Invoke-Native git @("config", "--global", "--unset", "albedo.configprobe")
 # The line is `file:<path>`, a TAB, then the key name. Split on that tab rather
 # than matching up to the first whitespace: a Windows profile path routinely
 # contains spaces (C:\Users\John Doe\.gitconfig), and matching to whitespace
@@ -518,7 +610,9 @@ git config --global --unset albedo.configprobe 2>$null
 $OriginPath = $null
 if ($ProbeOrigin) {
     $OriginField = ($ProbeOrigin -split "`t", 2)[0]
-    if ($OriginField.StartsWith("file:")) { $OriginPath = $OriginField.Substring(5) }
+    if ($OriginField.StartsWith("file:")) {
+        $OriginPath = Expand-GitQuotedPath $OriginField.Substring(5)
+    }
 }
 if ($OriginPath) {
     $GitConfigPath = $OriginPath
@@ -530,7 +624,7 @@ $AwsHelperCommand  = '!aws --profile prod-it01-bedrock codecommit credential-hel
 $CredentialSection = "`r`n[credential `"$MarketplaceUrl`"]`r`n`thelper = `r`n`thelper = $AwsHelperCommand`r`n`tUseHttpPath = true`r`n"
 [System.IO.File]::AppendAllText($GitConfigPath, $CredentialSection, [System.Text.UTF8Encoding]::new($false))
 
-$ConfiguredHelpers = @(git config --global --get-all "credential.$MarketplaceUrl.helper")
+$ConfiguredHelpers = (Invoke-Native git @("config", "--global", "--get-all", "credential.$MarketplaceUrl.helper")).Output
 if ($ConfiguredHelpers.Count -eq 2 -and $ConfiguredHelpers[0] -eq "") {
     Write-Ok "Git credential helper configured for the marketplace repository"
 } else {
@@ -616,22 +710,22 @@ if (Test-Path $claudeSettings) {
 # replacement is proven would turn "stale but usable" into "no marketplace at
 # all".
 Write-Status "Verifying marketplace access..."
-$lsRemote = git ls-remote $MarketplaceUrl 2>&1
-if ($LASTEXITCODE -eq 0) {
+$LsRemote = Invoke-Native git @("ls-remote", $MarketplaceUrl) -CaptureStderr
+if ($LsRemote.ExitCode -eq 0) {
     Write-Ok "Marketplace repository reachable"
 
     # A checkout whose origin is any other URL cannot pull from the marketplace.
     # The replacement is known good now, so drop it and let Claude Code clone
     # fresh on launch.
     if (Test-Path $MarketplaceClone) {
-        $OldOrigin = (git -C $MarketplaceClone remote get-url origin 2>$null)
+        $OldOrigin = (Invoke-Native git @("-C", $MarketplaceClone, "remote", "get-url", "origin")).Output | Select-Object -First 1
         if ($OldOrigin -ne $MarketplaceUrl) {
             Remove-Item $MarketplaceClone -Recurse -Force
             Write-Ok "Removed a stale marketplace clone (origin was $OldOrigin)"
         }
     }
 } else {
-    $lsErr = ($lsRemote | Out-String).Trim()
+    $lsErr = ($LsRemote.Output | Out-String).Trim()
     if ($lsErr -match "403") {
         Write-Warn "Marketplace access denied. Run: aws sso login --profile prod-it01-bedrock"
     } elseif ($lsErr -match "(?i)repository.*not found") {
@@ -665,7 +759,7 @@ if (Get-Command git -ErrorAction SilentlyContinue) {
 
 # AWS CLI
 if (Get-Command aws -ErrorAction SilentlyContinue) {
-    Write-Ok "AWS CLI: $(aws --version 2>&1)"
+    Write-Ok "AWS CLI: $((Invoke-Native aws @("--version") -CaptureStderr).Output -join ' ')"
 } else {
     Write-Err "AWS CLI: NOT FOUND"
 }

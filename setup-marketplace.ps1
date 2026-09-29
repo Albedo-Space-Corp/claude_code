@@ -21,6 +21,96 @@
 
 $ErrorActionPreference = "Stop"
 
+function Invoke-Native {
+    # Every native command whose streams are redirected goes through here, and
+    # returns its exit code plus output rather than throwing.
+    #
+    # Under the script-level $ErrorActionPreference = "Stop", Windows PowerShell 5.1
+    # turns a redirected native stderr write into a terminating NativeCommandError.
+    # Both redirection forms do it: `2>$null` and `2>&1`. Only a bare, unredirected
+    # call is safe, because its stderr goes straight to the console without becoming
+    # an ErrorRecord. That is backwards from the intuition the redirections were
+    # written with, and it means each one fired on exactly the failure path it was
+    # added to detect: an absent credential helper, a config section that is not
+    # there yet, an unreachable marketplace, a lapsed SSO session. Relaxing the
+    # preference to this function's scope is what keeps those recoverable.
+    #
+    # PowerShell 7 does not behave this way ($PSNativeCommandUseErrorActionPreference
+    # defaults to false), so CI on the pwsh image cannot catch a regression here by
+    # running the code. tests/test_setup_ccb.ps1 checks the shape statically.
+    #
+    # The argument list is one explicit array rather than remaining arguments:
+    # ValueFromRemainingArguments silently drops the first bare token, so
+    # `Invoke-Native git config --global ...` would hand git `--global ...` and earn
+    # a usage error.
+    param(
+        [Parameter(Mandatory = $true)][string]$Command,
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [string]$StandardInput,
+        # Keep stderr in the returned output, for callers that report the message.
+        [switch]$CaptureStderr
+    )
+    $ErrorActionPreference = "Continue"
+    if ($CaptureStderr) {
+        $Output = @(& $Command @Arguments 2>&1 | ForEach-Object { "$_" })
+    } elseif ($PSBoundParameters.ContainsKey("StandardInput")) {
+        $Output = @($StandardInput | & $Command @Arguments 2>$null)
+    } else {
+        $Output = @(& $Command @Arguments 2>$null)
+    }
+    return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $Output }
+}
+
+function Expand-GitQuotedPath {
+    # git C-style quotes a config origin path when it holds a character that needs
+    # escaping. On Windows every backslash qualifies, so a quoted path is the norm
+    # whenever GIT_CONFIG_GLOBAL is set, and a non-ASCII character arrives as one
+    # \nnn octal escape per UTF-8 byte (Jose with an acute e becomes Jos\303\251).
+    # Decoding to bytes and reading them back as UTF-8 recovers the original name.
+    #
+    # Stripping backslashes with a regex is not enough: that turns \303\251 into the
+    # literal characters 303251, and the credential section then lands in a path git
+    # never reads, leaving the marketplace unauthenticated.
+    #
+    # Asking git to print the path unescaped instead (GIT_EDITOR=echo git config
+    # --global --edit) is worse here rather than better: that emits raw UTF-8, which
+    # Windows PowerShell 5.1 decodes with the console code page and mangles. The
+    # escaped form is pure ASCII and survives any code page.
+    param([Parameter(Mandatory = $true)][string]$Quoted)
+    if ($Quoted.Length -lt 2 -or -not ($Quoted.StartsWith('"') -and $Quoted.EndsWith('"'))) {
+        return $Quoted
+    }
+    $Body = $Quoted.Substring(1, $Quoted.Length - 2)
+    $Bytes = New-Object System.Collections.Generic.List[byte]
+    $Simple = @{ 'a' = 7; 'b' = 8; 'f' = 12; 'n' = 10; 'r' = 13; 't' = 9; 'v' = 11; '\' = 92; '"' = 34 }
+    $i = 0
+    while ($i -lt $Body.Length) {
+        if ($Body[$i] -ne '\') {
+            $Bytes.AddRange([System.Text.Encoding]::UTF8.GetBytes([string]$Body[$i]))
+            $i++
+            continue
+        }
+        $i++
+        if ($i -ge $Body.Length) { break }
+        $Next = [string]$Body[$i]
+        if ($Simple.ContainsKey($Next)) {
+            $Bytes.Add([byte]$Simple[$Next])
+            $i++
+        } elseif ($Next -match '^[0-7]$') {
+            $Octal = ""
+            while ($i -lt $Body.Length -and $Octal.Length -lt 3 -and [string]$Body[$i] -match '^[0-7]$') {
+                $Octal += $Body[$i]
+                $i++
+            }
+            $Bytes.Add([Convert]::ToByte($Octal, 8))
+        } else {
+            $Bytes.AddRange([System.Text.Encoding]::UTF8.GetBytes($Next))
+            $i++
+        }
+    }
+    return [System.Text.Encoding]::UTF8.GetString($Bytes.ToArray())
+}
+
 # ── Configuration ────────────────────────────────────────────────────
 $MarketplaceKey = "albedo-claude-plugin-marketplace"
 $OfficialKey    = "claude-plugins-official"
@@ -67,8 +157,8 @@ foreach ($tool in @("git", "aws")) {
 }
 
 Write-Host "Checking AWS SSO session for profile '$AwsProfile'..."
-aws sts get-caller-identity --profile $AwsProfile 2>&1 | Out-Null
-$SsoOk = ($LASTEXITCODE -eq 0)
+$Caller = Invoke-Native aws @("sts", "get-caller-identity", "--profile", $AwsProfile) -CaptureStderr
+$SsoOk = ($Caller.ExitCode -eq 0)
 if (-not $SsoOk) {
     Write-Host "Warning: no active AWS SSO session for profile '$AwsProfile'." -ForegroundColor Yellow
     Write-Host "  Run: aws sso login --profile $AwsProfile" -ForegroundColor Yellow
@@ -92,14 +182,15 @@ Write-Host "Clearing any cached credential for $CodeCommitHost..."
 # helper selection, so this works regardless of the config written below.
 #
 # Both binary names are tried: Git for Windows renamed
-# git-credential-manager-core to git-credential-manager in 2022, and both are
-# still in the field.
+# git-credential-manager-core to git-credential-manager in 2022, so on any
+# current Git the second name is absent and git reports it as an unknown
+# command. That is expected, which is why these go through Invoke-Git.
 $CodeCommitHostname = ([Uri]$CodeCommitHost).Host
 # The trailing blank line terminates the git credential request; without it a
 # helper can block waiting for more input.
 $EraseRequest = "protocol=https`nhost=$CodeCommitHostname`n`n"
 foreach ($gcm in @("credential-manager", "credential-manager-core")) {
-    $EraseRequest | git $gcm erase 2>$null | Out-Null
+    $null = Invoke-Native -Command git -StandardInput $EraseRequest -Arguments @($gcm, "erase")
 }
 Write-Host "Done."
 
@@ -130,7 +221,7 @@ Write-Host "Configuring git credentials for the marketplace repository..."
 # Idempotency means clearing any prior version of the section first.
 # --remove-section fails when the section does not exist yet, which is the normal
 # first-run case, so its stderr is discarded.
-git config --global --remove-section "credential.$RepoUrl" 2>$null
+$null = Invoke-Native git @("config", "--global", "--remove-section", "credential.$RepoUrl")
 
 # PowerShell cannot reliably pass an empty-string argument to a native
 # executable: it is silently dropped from the child process command line, a
@@ -143,10 +234,10 @@ git config --global --remove-section "credential.$RepoUrl" 2>$null
 # when one already exists. Writing a throwaway key is the only reliable way to
 # make git name the file, because --show-origin reports nothing when the config
 # is empty.
-git config --global --add albedo.configprobe 1 2>$null
-$ProbeOrigin = git config --global --list --show-origin --name-only 2>$null |
+$null = Invoke-Native git @("config", "--global", "--add", "albedo.configprobe", "1")
+$ProbeOrigin = (Invoke-Native git @("config", "--global", "--list", "--show-origin", "--name-only")).Output |
     Where-Object { $_ -match "albedo\.configprobe" } | Select-Object -First 1
-git config --global --unset albedo.configprobe 2>$null
+$null = Invoke-Native git @("config", "--global", "--unset", "albedo.configprobe")
 # The line is `file:<path>`, a TAB, then the key name. Split on that tab rather
 # than matching up to the first whitespace: a Windows profile path routinely
 # contains spaces (C:\Users\John Doe\.gitconfig), and matching to whitespace
@@ -155,7 +246,9 @@ git config --global --unset albedo.configprobe 2>$null
 $OriginPath = $null
 if ($ProbeOrigin) {
     $OriginField = ($ProbeOrigin -split "`t", 2)[0]
-    if ($OriginField.StartsWith("file:")) { $OriginPath = $OriginField.Substring(5) }
+    if ($OriginField.StartsWith("file:")) {
+        $OriginPath = Expand-GitQuotedPath $OriginField.Substring(5)
+    }
 }
 if ($OriginPath) {
     $GitConfigPath = $OriginPath
@@ -167,7 +260,7 @@ $AwsHelperCommand  = '!aws --profile ' + $AwsProfile + ' codecommit credential-h
 $CredentialSection = "`r`n[credential `"$RepoUrl`"]`r`n`thelper = `r`n`thelper = $AwsHelperCommand`r`n`tUseHttpPath = true`r`n"
 [System.IO.File]::AppendAllText($GitConfigPath, $CredentialSection, [System.Text.UTF8Encoding]::new($false))
 
-$ConfiguredHelpers = @(git config --global --get-all "credential.$RepoUrl.helper")
+$ConfiguredHelpers = (Invoke-Native git @("config", "--global", "--get-all", "credential.$RepoUrl.helper")).Output
 if ($ConfiguredHelpers.Count -ne 2 -or $ConfiguredHelpers[0] -ne "") {
     Write-Error "Expected an empty helper followed by the AWS helper for $RepoUrl, got: $ConfiguredHelpers. Check $GitConfigPath manually."
     exit 1
@@ -261,13 +354,13 @@ if (Test-Path $SettingsFile) {
 # whose SSO session has lapsed.
 Write-Host ""
 Write-Host "Verifying access to the marketplace repository..."
-$LsRemoteOutput = git ls-remote $RepoUrl 2>&1
-if ($LASTEXITCODE -eq 0) {
+$LsRemote = Invoke-Native git @("ls-remote", $RepoUrl) -CaptureStderr
+if ($LsRemote.ExitCode -eq 0) {
     # A checkout whose origin is any other URL cannot pull from the marketplace.
     # The replacement is known good now, so drop it and let Claude Code clone
     # fresh on launch.
     if (Test-Path $MarketplaceClone) {
-        $OldOrigin = (git -C $MarketplaceClone remote get-url origin 2>$null)
+        $OldOrigin = (Invoke-Native git @("-C", $MarketplaceClone, "remote", "get-url", "origin")).Output | Select-Object -First 1
         if ($OldOrigin -ne $RepoUrl) {
             Write-Host ""
             Write-Host "Removing a stale marketplace clone (origin was $OldOrigin)..."
@@ -278,7 +371,7 @@ if ($LASTEXITCODE -eq 0) {
     Write-Host "Done. The Albedo plugin marketplace is registered and reachable." -ForegroundColor Green
     Write-Host "Restart Claude Code and run /plugin to browse and install plugins."
 } else {
-    $ErrorText = ($LsRemoteOutput | Out-String).Trim()
+    $ErrorText = ($LsRemote.Output | Out-String).Trim()
     Write-Host "Failed to reach the marketplace repository." -ForegroundColor Red
     if ($ErrorText -match "403") {
         Write-Host "  403: either the credential helper is not being used, or your AWS SSO session has expired." -ForegroundColor Yellow
