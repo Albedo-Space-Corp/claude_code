@@ -130,6 +130,40 @@ function Expand-GitQuotedPath {
     return [System.Text.Encoding]::UTF8.GetString($Bytes.ToArray())
 }
 
+function Invoke-GitNonInteractive {
+    # Runs git with every credential prompt disabled, then restores the caller's
+    # environment.
+    #
+    # The AWS credential helper prints its own diagnostic and returns nothing when
+    # it cannot mint a password (no SSO session, wrong profile, aws not on PATH,
+    # missing codecommit:GitPull), and git's response to an empty credential is to
+    # ask the user for one. That turns a diagnosable failure into "Username for
+    # 'https://git-codecommit.us-west-2.amazonaws.com'" and a hung installer.
+    #
+    # All three suppressors are needed: GIT_TERMINAL_PROMPT stops the terminal
+    # prompt, GIT_ASKPASS pre-empts a configured core.askPass that could open a GUI
+    # dialog, and GCM_INTERACTIVE stops Git Credential Manager doing the same.
+    param([Parameter(Mandatory = $true)][string[]]$Arguments)
+    $Saved = @{}
+    foreach ($Name in "GIT_TERMINAL_PROMPT", "GIT_ASKPASS", "GCM_INTERACTIVE") {
+        $Saved[$Name] = [Environment]::GetEnvironmentVariable($Name)
+    }
+    try {
+        $env:GIT_TERMINAL_PROMPT = "0"
+        $env:GIT_ASKPASS = "echo"
+        $env:GCM_INTERACTIVE = "never"
+        return Invoke-Native git $Arguments -CaptureStderr
+    } finally {
+        foreach ($Name in $Saved.Keys) {
+            if ($null -eq $Saved[$Name]) {
+                Remove-Item "Env:\$Name" -ErrorAction SilentlyContinue
+            } else {
+                Set-Item "Env:\$Name" -Value $Saved[$Name]
+            }
+        }
+    }
+}
+
 # ── Banner ───────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "===========================================================" -ForegroundColor Green
@@ -710,7 +744,7 @@ if (Test-Path $claudeSettings) {
 # replacement is proven would turn "stale but usable" into "no marketplace at
 # all".
 Write-Status "Verifying marketplace access..."
-$LsRemote = Invoke-Native git @("ls-remote", $MarketplaceUrl) -CaptureStderr
+$LsRemote = Invoke-GitNonInteractive @("ls-remote", $MarketplaceUrl)
 if ($LsRemote.ExitCode -eq 0) {
     Write-Ok "Marketplace repository reachable"
 
@@ -726,13 +760,24 @@ if ($LsRemote.ExitCode -eq 0) {
     }
 } else {
     $lsErr = ($LsRemote.Output | Out-String).Trim()
+    # The two credential failures need different advice, so they are reported
+    # separately, and git's own message is always shown. A 403 means the helper
+    # produced a password and CodeCommit refused it. "Could not read Username"
+    # means the helper produced nothing at all, which no amount of logging in fixes
+    # if the cause is a missing profile or an aws that is not on PATH.
     if ($lsErr -match "403") {
-        Write-Warn "Marketplace access denied. Run: aws sso login --profile prod-it01-bedrock"
+        Write-Warn "Marketplace credentials were rejected (403)."
+        Write-Warn "Try: aws sso login --profile prod-it01-bedrock"
+        Write-Warn "If that does not help, your role may lack codecommit:GitPull or kms:Decrypt."
+    } elseif ($lsErr -match "could not read Username|terminal prompts disabled") {
+        Write-Warn "The AWS credential helper returned no credentials."
+        Write-Warn "Check that profile prod-it01-bedrock exists and that aws is on PATH."
     } elseif ($lsErr -match "(?i)repository.*not found") {
         Write-Warn "Marketplace repository not found at $MarketplaceUrl"
     } else {
-        Write-Warn "Could not reach the marketplace: $lsErr"
+        Write-Warn "Could not reach the marketplace."
     }
+    Write-Warn "git reported: $lsErr"
     Write-Warn "Any marketplace already on this machine was left untouched, so /plugin keeps"
     Write-Warn "working from its last sync. Re-run setup once the above is fixed."
 }

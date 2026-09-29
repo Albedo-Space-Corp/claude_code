@@ -486,7 +486,15 @@ fi
 # replacement is proven would turn "stale but usable" into "no marketplace at
 # all" for anyone whose SSO session has lapsed.
 print_status "Verifying marketplace access..."
-if MARKETPLACE_ERR=$(git ls-remote "$MARKETPLACE_URL" 2>&1 >/dev/null); then
+# Interactive credential prompts are disabled for this check. The AWS credential
+# helper prints its own diagnostic and returns nothing when it cannot mint a
+# password (no SSO session, wrong profile, aws not on PATH, missing
+# codecommit:GitPull), and git's response to an empty credential is to ask the
+# user for one. That turns a diagnosable failure into "Username for
+# 'https://git-codecommit.us-west-2.amazonaws.com'" and a hung installer.
+# GIT_ASKPASS is set as well as GIT_TERMINAL_PROMPT, because a configured
+# core.askPass would otherwise still be consulted, possibly as a GUI dialog.
+if MARKETPLACE_ERR=$(GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=echo git ls-remote "$MARKETPLACE_URL" 2>&1 >/dev/null); then
     print_success "Marketplace repository reachable"
 
     # A checkout whose origin is any other URL cannot pull from the marketplace.
@@ -504,14 +512,25 @@ else
     # to one line: otherwise the warning prints with a blank first line and the
     # real reason buried underneath.
     MARKETPLACE_ERR="$(printf '%s' "$MARKETPLACE_ERR" | tr '\n' ' ' | sed 's/  */ /g; s/^ *//; s/ *$//')"
+    # The two credential failures need different advice, so they are reported
+    # separately, and git's own message is always shown. A 403 means the helper
+    # produced a password and CodeCommit refused it. "Could not read Username"
+    # means the helper produced nothing at all, which no amount of logging in
+    # fixes if the cause is a missing profile or an aws that is not on PATH.
     case "$MARKETPLACE_ERR" in
         *403*)
-            print_warning "Marketplace access denied. Run: aws sso login --profile prod-it01-bedrock" ;;
+            print_warning "Marketplace credentials were rejected (403)."
+            print_warning "Try: aws sso login --profile prod-it01-bedrock"
+            print_warning "If that does not help, your role may lack codecommit:GitPull or kms:Decrypt." ;;
+        *"could not read Username"*|*"terminal prompts disabled"*)
+            print_warning "The AWS credential helper returned no credentials."
+            print_warning "Check that profile prod-it01-bedrock exists and that aws is on PATH." ;;
         *"not found"*|*404*)
             print_warning "Marketplace repository not found at $MARKETPLACE_URL" ;;
         *)
-            print_warning "Could not reach the marketplace: $MARKETPLACE_ERR" ;;
+            print_warning "Could not reach the marketplace." ;;
     esac
+    print_warning "git reported: $MARKETPLACE_ERR"
     print_warning "Any marketplace already on this machine was left untouched, so /plugin keeps"
     print_warning "working from its last sync. Re-run setup once the above is fixed."
 fi

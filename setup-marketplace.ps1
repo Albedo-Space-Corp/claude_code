@@ -111,6 +111,40 @@ function Expand-GitQuotedPath {
     return [System.Text.Encoding]::UTF8.GetString($Bytes.ToArray())
 }
 
+function Invoke-GitNonInteractive {
+    # Runs git with every credential prompt disabled, then restores the caller's
+    # environment.
+    #
+    # The AWS credential helper prints its own diagnostic and returns nothing when
+    # it cannot mint a password (no SSO session, wrong profile, aws not on PATH,
+    # missing codecommit:GitPull), and git's response to an empty credential is to
+    # ask the user for one. That turns a diagnosable failure into "Username for
+    # 'https://git-codecommit.us-west-2.amazonaws.com'" and a hung installer.
+    #
+    # All three suppressors are needed: GIT_TERMINAL_PROMPT stops the terminal
+    # prompt, GIT_ASKPASS pre-empts a configured core.askPass that could open a GUI
+    # dialog, and GCM_INTERACTIVE stops Git Credential Manager doing the same.
+    param([Parameter(Mandatory = $true)][string[]]$Arguments)
+    $Saved = @{}
+    foreach ($Name in "GIT_TERMINAL_PROMPT", "GIT_ASKPASS", "GCM_INTERACTIVE") {
+        $Saved[$Name] = [Environment]::GetEnvironmentVariable($Name)
+    }
+    try {
+        $env:GIT_TERMINAL_PROMPT = "0"
+        $env:GIT_ASKPASS = "echo"
+        $env:GCM_INTERACTIVE = "never"
+        return Invoke-Native git $Arguments -CaptureStderr
+    } finally {
+        foreach ($Name in $Saved.Keys) {
+            if ($null -eq $Saved[$Name]) {
+                Remove-Item "Env:\$Name" -ErrorAction SilentlyContinue
+            } else {
+                Set-Item "Env:\$Name" -Value $Saved[$Name]
+            }
+        }
+    }
+}
+
 # ── Configuration ────────────────────────────────────────────────────
 $MarketplaceKey = "albedo-claude-plugin-marketplace"
 $OfficialKey    = "claude-plugins-official"
@@ -354,7 +388,7 @@ if (Test-Path $SettingsFile) {
 # whose SSO session has lapsed.
 Write-Host ""
 Write-Host "Verifying access to the marketplace repository..."
-$LsRemote = Invoke-Native git @("ls-remote", $RepoUrl) -CaptureStderr
+$LsRemote = Invoke-GitNonInteractive @("ls-remote", $RepoUrl)
 if ($LsRemote.ExitCode -eq 0) {
     # A checkout whose origin is any other URL cannot pull from the marketplace.
     # The replacement is known good now, so drop it and let Claude Code clone
@@ -373,18 +407,25 @@ if ($LsRemote.ExitCode -eq 0) {
 } else {
     $ErrorText = ($LsRemote.Output | Out-String).Trim()
     Write-Host "Failed to reach the marketplace repository." -ForegroundColor Red
+    # A 403 means the helper produced a password and CodeCommit refused it.
+    # "Could not read Username" means it produced nothing, which logging in does
+    # not fix if the cause is a missing profile or an aws that is not on PATH.
     if ($ErrorText -match "403") {
-        Write-Host "  403: either the credential helper is not being used, or your AWS SSO session has expired." -ForegroundColor Yellow
+        Write-Host "  403: credentials were rejected." -ForegroundColor Yellow
         if (-not $SsoOk) {
             Write-Host "  Run: aws sso login --profile $AwsProfile, then re-run this script." -ForegroundColor Yellow
         } else {
-            Write-Host "  Your role may lack codecommit:GitPull. Ask in #it-help with this message." -ForegroundColor Yellow
+            Write-Host "  Your role may lack codecommit:GitPull or kms:Decrypt. Ask in #it-help with this message." -ForegroundColor Yellow
         }
+    } elseif ($ErrorText -match "could not read Username|terminal prompts disabled") {
+        Write-Host "  The AWS credential helper returned no credentials." -ForegroundColor Yellow
+        Write-Host "  Check that profile $AwsProfile exists and that aws is on PATH." -ForegroundColor Yellow
     } elseif ($ErrorText -match "(?i)repository.*not found") {
         Write-Host "  Repository not found. Expected: $RepoUrl" -ForegroundColor Yellow
-    } else {
-        Write-Host "  $ErrorText" -ForegroundColor Yellow
     }
+    # Always show git's own message, whichever branch ran. Replacing it with fixed
+    # advice hid the real cause.
+    Write-Host "  git reported: $ErrorText" -ForegroundColor Yellow
     Write-Host ""
     Write-Host "  Any marketplace already on this machine was left untouched, so /plugin keeps" -ForegroundColor Yellow
     Write-Host "  working from its last sync. Re-run this script once the above is fixed." -ForegroundColor Yellow

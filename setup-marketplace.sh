@@ -178,7 +178,15 @@ fi
 # is proven would turn "stale but usable" into "no marketplace at all" for anyone
 # whose SSO session has lapsed.
 echo "Verifying access to the marketplace repository..."
-if MARKETPLACE_ERR="$(git ls-remote "$MARKETPLACE_URL" 2>&1 >/dev/null)"; then
+# Interactive credential prompts are disabled for this check. The AWS credential
+# helper prints its own diagnostic and returns nothing when it cannot mint a
+# password (no SSO session, wrong profile, aws not on PATH, missing
+# codecommit:GitPull), and git's response to an empty credential is to ask the
+# user for one. That turns a diagnosable failure into "Username for
+# 'https://git-codecommit.us-west-2.amazonaws.com'" and a hung installer.
+# GIT_ASKPASS is set as well as GIT_TERMINAL_PROMPT, because a configured
+# core.askPass would otherwise still be consulted, possibly as a GUI dialog.
+if MARKETPLACE_ERR="$(GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=echo git ls-remote "$MARKETPLACE_URL" 2>&1 >/dev/null)"; then
   # A checkout whose origin is any other URL cannot pull from the marketplace.
   # The replacement is known good now, so drop it and let Claude Code clone
   # fresh on launch.
@@ -199,19 +207,28 @@ else
   MARKETPLACE_ERR="$(printf '%s' "$MARKETPLACE_ERR" | tr '\n' ' ' | sed 's/  */ /g; s/^ *//; s/ *$//')"
   echo "Error: could not reach the marketplace repository." >&2
   case "$MARKETPLACE_ERR" in
+    # A 403 means the helper produced a password and CodeCommit refused it.
+    # "Could not read Username" means it produced nothing, which logging in does
+    # not fix if the cause is a missing profile or an aws that is not on PATH.
     *403*)
       echo "  403 — credentials were rejected." >&2
       if [ "$SSO_OK" = "0" ]; then
         echo "  Run: aws sso login --profile $AWS_PROFILE_NAME   then re-run this script." >&2
       else
-        echo "  Your role may lack codecommit:GitPull. Ask in #it-help with this message." >&2
+        echo "  Your role may lack codecommit:GitPull or kms:Decrypt. Ask in #it-help with this message." >&2
       fi
+      ;;
+    *"could not read Username"*|*"terminal prompts disabled"*)
+      echo "  The AWS credential helper returned no credentials." >&2
+      echo "  Check that profile $AWS_PROFILE_NAME exists and that aws is on PATH." >&2
       ;;
     *"not found"*|*404*)
       echo "  Repository not found. Expected: $MARKETPLACE_URL" >&2 ;;
-    *)
-      echo "  $MARKETPLACE_ERR" >&2 ;;
+    *) ;;
   esac
+  # Always show git's own message, whichever branch ran. Replacing it with fixed
+  # advice hid the real cause.
+  echo "  git reported: $MARKETPLACE_ERR" >&2
   echo "" >&2
   echo "  Any marketplace already on this machine was left untouched, so /plugin" >&2
   echo "  keeps working from its last sync. Re-run this script once the above is fixed." >&2
