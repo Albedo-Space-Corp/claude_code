@@ -380,6 +380,14 @@ else
 fi
 
 # ── Step 7: Plugin marketplace ────────────────────────────────────────────
+# The clock remedy differs per platform, and this installer serves macOS, Linux
+# and WSL, so it cannot suggest w32tm alone.
+if [ "$MACHINE" = "Mac" ]; then
+    CLOCK_FIX_HINT="sudo sntp -sS time.apple.com"
+else
+    CLOCK_FIX_HINT="sudo timedatectl set-ntp true (WSL: fix the Windows clock with net start w32time; w32tm /resync /force)"
+fi
+
 print_status "Setting up Albedo plugin marketplace..."
 
 # The marketplace is a CodeCommit repository cloned over HTTPS, authorized by
@@ -520,8 +528,24 @@ else
     case "$MARKETPLACE_ERR" in
         *403*)
             print_warning "Marketplace credentials were rejected (403)."
-            print_warning "Try: aws sso login --profile prod-it01-bedrock"
-            print_warning "If that does not help, your role may lack codecommit:GitPull or kms:Decrypt." ;;
+            # SigV4 rejects a request signed outside a 15-minute window, and
+            # CodeCommit reports that as a bare 403 with nothing about time. The
+            # credential helper cannot catch it either: it signs locally and never
+            # calls AWS, so it hands git a password that is already invalid. Asking
+            # STS is the cheapest way to make AWS state the skew itself.
+            SKEW_ERR=$(aws sts get-caller-identity --profile prod-it01-bedrock 2>&1 >/dev/null || true)
+            # Only the time-specific messages mean a skew. A bare
+            # SignatureDoesNotMatch also covers wrong credentials.
+            case "$SKEW_ERR" in
+                *"Signature not yet current"*|*"Signature expired"*|*RequestTimeTooSkewed*)
+                    print_warning "This machine's clock is too far from AWS for request signing to work."
+                    print_warning "Fix the clock, then re-run setup: $CLOCK_FIX_HINT"
+                    print_warning "AWS said: $SKEW_ERR" ;;
+                *)
+                    print_warning "Try: aws sso login --profile prod-it01-bedrock"
+                    print_warning "If that does not help, your role may lack codecommit:GitPull or kms:Decrypt." ;;
+            esac
+            ;;
         *"could not read Username"*|*"terminal prompts disabled"*)
             print_warning "The AWS credential helper returned no credentials."
             print_warning "Check that profile prod-it01-bedrock exists and that aws is on PATH." ;;

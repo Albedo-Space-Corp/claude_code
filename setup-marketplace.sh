@@ -212,11 +212,30 @@ else
     # not fix if the cause is a missing profile or an aws that is not on PATH.
     *403*)
       echo "  403 — credentials were rejected." >&2
-      if [ "$SSO_OK" = "0" ]; then
-        echo "  Run: aws sso login --profile $AWS_PROFILE_NAME   then re-run this script." >&2
+      # SigV4 rejects a request signed outside a 15-minute window, and CodeCommit
+      # reports that as a bare 403 with nothing about time. The credential helper
+      # cannot catch it either: it signs locally and never calls AWS, so it hands
+      # git a password that is already invalid. Asking STS makes AWS state the skew.
+      SKEW_ERR="$(aws sts get-caller-identity --profile "$AWS_PROFILE_NAME" 2>&1 >/dev/null || true)"
+      # Only the time-specific messages mean a skew. A bare SignatureDoesNotMatch
+      # also covers wrong credentials.
+      if [ "$(uname -s)" = "Darwin" ]; then
+        CLOCK_FIX_HINT="sudo sntp -sS time.apple.com"
       else
-        echo "  Your role may lack codecommit:GitPull or kms:Decrypt. Ask in #it-help with this message." >&2
+        CLOCK_FIX_HINT="sudo timedatectl set-ntp true (WSL: fix the Windows clock with net start w32time; w32tm /resync /force)"
       fi
+      case "$SKEW_ERR" in
+        *"Signature not yet current"*|*"Signature expired"*|*RequestTimeTooSkewed*)
+          echo "  This machine's clock is too far from AWS for request signing to work." >&2
+          echo "  Fix the clock, then re-run this script: $CLOCK_FIX_HINT" >&2
+          echo "  AWS said: $SKEW_ERR" >&2 ;;
+        *)
+          if [ "$SSO_OK" = "0" ]; then
+            echo "  Run: aws sso login --profile $AWS_PROFILE_NAME   then re-run this script." >&2
+          else
+            echo "  Your role may lack codecommit:GitPull or kms:Decrypt. Ask in #it-help with this message." >&2
+          fi ;;
+      esac
       ;;
     *"could not read Username"*|*"terminal prompts disabled"*)
       echo "  The AWS credential helper returned no credentials." >&2

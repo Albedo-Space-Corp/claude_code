@@ -767,8 +767,22 @@ if ($LsRemote.ExitCode -eq 0) {
     # if the cause is a missing profile or an aws that is not on PATH.
     if ($lsErr -match "403") {
         Write-Warn "Marketplace credentials were rejected (403)."
-        Write-Warn "Try: aws sso login --profile prod-it01-bedrock"
-        Write-Warn "If that does not help, your role may lack codecommit:GitPull or kms:Decrypt."
+        # SigV4 rejects a request signed outside a 15-minute window, and CodeCommit
+        # reports that as a bare 403 with nothing about time. The credential helper
+        # cannot catch it either: it signs locally and never calls AWS, so it hands
+        # git a password that is already invalid. Asking STS is the cheapest way to
+        # make AWS state the skew itself.
+        $SkewErr = (Invoke-Native aws @("sts", "get-caller-identity", "--profile", "prod-it01-bedrock") -CaptureStderr).Output -join " "
+        # Only the time-specific messages mean a skew. A bare SignatureDoesNotMatch
+        # also covers wrong credentials.
+        if ($SkewErr -match "Signature not yet current|Signature expired|RequestTimeTooSkewed") {
+            Write-Warn "This machine's clock is too far from AWS for request signing to work."
+            Write-Warn "Fix the clock, then re-run setup: net start w32time; w32tm /resync /force"
+            Write-Warn "AWS said: $SkewErr"
+        } else {
+            Write-Warn "Try: aws sso login --profile prod-it01-bedrock"
+            Write-Warn "If that does not help, your role may lack codecommit:GitPull or kms:Decrypt."
+        }
     } elseif ($lsErr -match "could not read Username|terminal prompts disabled") {
         Write-Warn "The AWS credential helper returned no credentials."
         Write-Warn "Check that profile prod-it01-bedrock exists and that aws is on PATH."

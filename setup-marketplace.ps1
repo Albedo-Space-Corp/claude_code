@@ -412,7 +412,18 @@ if ($LsRemote.ExitCode -eq 0) {
     # not fix if the cause is a missing profile or an aws that is not on PATH.
     if ($ErrorText -match "403") {
         Write-Host "  403: credentials were rejected." -ForegroundColor Yellow
-        if (-not $SsoOk) {
+        # SigV4 rejects a request signed outside a 15-minute window, and CodeCommit
+        # reports that as a bare 403 with nothing about time. The credential helper
+        # cannot catch it either: it signs locally and never calls AWS, so it hands
+        # git a password that is already invalid. Asking STS makes AWS state the skew.
+        $SkewErr = (Invoke-Native aws @("sts", "get-caller-identity", "--profile", $AwsProfile) -CaptureStderr).Output -join " "
+        # Only the time-specific messages mean a skew. A bare SignatureDoesNotMatch
+        # also covers wrong credentials.
+        if ($SkewErr -match "Signature not yet current|Signature expired|RequestTimeTooSkewed") {
+            Write-Host "  This machine's clock is too far from AWS for request signing to work." -ForegroundColor Yellow
+            Write-Host "  Fix the clock, then re-run this script: net start w32time; w32tm /resync /force" -ForegroundColor Yellow
+            Write-Host "  AWS said: $SkewErr" -ForegroundColor Yellow
+        } elseif (-not $SsoOk) {
             Write-Host "  Run: aws sso login --profile $AwsProfile, then re-run this script." -ForegroundColor Yellow
         } else {
             Write-Host "  Your role may lack codecommit:GitPull or kms:Decrypt. Ask in #it-help with this message." -ForegroundColor Yellow
