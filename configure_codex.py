@@ -5,6 +5,7 @@
 """Shared configuration for the macOS/Linux and Windows Codex installers."""
 
 import configparser
+import json
 import os
 from pathlib import Path
 import re
@@ -42,6 +43,14 @@ output = json
 """
 MARKETPLACE_URL = "https://git-codecommit.us-west-2.amazonaws.com/v1/repos/albedo-plugins.git"
 
+# Commercial uses Bedrock Runtime: it serves GPT-6 through US cross-Region
+# inference profiles (us.openai.*) under the bedrock:InvokeModel permissions
+# AlbedoBedrockUsers already has. GovCloud Runtime serves no GPT-5.6 or GPT-6,
+# so the gov overlay stays on Mantle, whose IDs are bare (openai.*).
+RUNTIME_PROVIDER = "amazon-bedrock-runtime"
+MANTLE_PROVIDER = "amazon-bedrock"
+COMMERCIAL_BEDROCK = {"aws": {"profile": "prod-it01-bedrock", "region": "us-west-2"}}
+
 # `codex --profile gov` layers gov.config.toml over config.toml. The gov Mantle
 # endpoint must be set explicitly (the provider derives only commercial
 # endpoints from its region), and on the /openai/v1 path: /v1 rejects the
@@ -52,9 +61,9 @@ GOV_PROVIDER = {
 }
 # Bedrock model IDs are literals: the provider has no `opus`/`sonnet`-style
 # aliases to resolve a tier at request time, so the default tier is whatever is
-# written here. Each partition gets the strongest Mantle model it serves. Within
-# a generation the tiers rank Sol > Terra > Luna, and GovCloud carries neither
-# Sol nor any GPT-6, so the two partitions cannot share a pin.
+# written here. Each partition gets the strongest model it serves. Within a
+# generation the tiers rank Sol > Terra > Luna, and GovCloud carries neither Sol
+# nor any GPT-6, so the two partitions cannot share a pin.
 #
 # SUPERSEDED holds every model this installer has previously written as that
 # partition's default. Setup replaces one it finds, so bumping a pin reaches
@@ -62,9 +71,9 @@ GOV_PROVIDER = {
 # user and is left alone. Without the lists a pin is a one-shot initial value
 # that can never move, since the first run makes every later run a no-op. When a
 # pin changes, append the old value here in the same commit.
-COMMERCIAL_MODEL = "openai.gpt-6.1-sol"
+COMMERCIAL_MODEL = "us.openai.gpt-6.1-sol"
 COMMERCIAL_EFFORT_LEVEL = "medium"
-SUPERSEDED_COMMERCIAL_MODELS = ()
+SUPERSEDED_COMMERCIAL_MODELS = ("openai.gpt-6-astra", "openai.gpt-6.1-sol")
 GOV_MODEL = "openai.gpt-5.6-terra"
 SUPERSEDED_GOV_MODELS = ("openai.gpt-5.6-luna",)
 
@@ -130,25 +139,28 @@ def codex_settings(text):
             del config["profiles"]
     if config.get("profile") == "gov":
         del config["profile"]
-    config["model_provider"] = "amazon-bedrock"
+    config["model_provider"] = RUNTIME_PROVIDER
     config["service_tier"] = "default"
-    # ChatGPT model IDs aren't Bedrock IDs, so drop any that Bedrock cannot
-    # serve while keeping a model the user already selected on Bedrock.
-    for key in ("model", "review_model"):
-        if key in config and not str(config[key]).startswith("openai."):
-            del config[key]
+    # Runtime has no hosted web search; Codex fails requests that ask for it.
+    config["web_search"] = "disabled"
+    # Runtime serves only cross-Region profiles, and IAM denies global.*, so
+    # only us.* selections survive. ChatGPT and Mantle (openai.*) IDs fail on
+    # Runtime and are dropped.
     agents = config.get("agents", {})
-    if "default_subagent_model" in agents and not str(agents["default_subagent_model"]).startswith("openai."):
-        del agents["default_subagent_model"]
+    for table, key in ((config, "model"), (config, "review_model"), (agents, "default_subagent_model")):
+        if key in table and not str(table[key]).startswith("us."):
+            del table[key]
     # Only `model` is pinned; review and subagent selections fall back to it.
     pin_model(config, "model", COMMERCIAL_MODEL, SUPERSEDED_COMMERCIAL_MODELS)
     pin_model(config, "model_reasoning_effort", COMMERCIAL_EFFORT_LEVEL, ())
     providers = config.setdefault("model_providers", tomlkit.table())
-    # Commercial needs only the AWS profile and region; the provider derives its
-    # Mantle endpoint from the region.
-    bedrock = {"aws": {"profile": "prod-it01-bedrock", "region": "us-west-2"}}
-    if providers.get("amazon-bedrock") != bedrock:
-        providers["amazon-bedrock"] = bedrock
+    # The provider derives its Runtime endpoint from the region.
+    if providers.get(RUNTIME_PROVIDER) != COMMERCIAL_BEDROCK:
+        providers[RUNTIME_PROVIDER] = COMMERCIAL_BEDROCK
+    # The commercial Mantle entry earlier setups wrote is unused now; the gov
+    # overlay replaces that provider entirely.
+    if providers.get(MANTLE_PROVIDER) == COMMERCIAL_BEDROCK:
+        del providers[MANTLE_PROVIDER]
     marketplaces = config.setdefault("marketplaces", tomlkit.table())
     marketplace = {"source_type": "git", "source": MARKETPLACE_URL}
     if marketplaces.get("albedo-claude-plugin-marketplace") != marketplace:
@@ -194,9 +206,11 @@ def gov_codex_settings(text, base_text, legacy_gov=None):
         # comments from an `[agents]` table setup never touched.
         pin_model(agents, "default_subagent_model", GOV_MODEL, SUPERSEDED_GOV_MODELS,
                   add="default_subagent_model" in base_agents)
+    # The base selects Runtime, which serves no GPT-5.6 or GPT-6 in GovCloud.
+    config["model_provider"] = MANTLE_PROVIDER
     providers = config.setdefault("model_providers", tomlkit.table())
-    if providers.get("amazon-bedrock") != GOV_PROVIDER:
-        providers["amazon-bedrock"] = GOV_PROVIDER
+    if providers.get(MANTLE_PROVIDER) != GOV_PROVIDER:
+        providers[MANTLE_PROVIDER] = GOV_PROVIDER
     return tomlkit.dumps(config)
 
 
@@ -245,9 +259,11 @@ def write_configs(configs):
             temporary.unlink(missing_ok=True)
     for path, _, _ in applied:
         print(f"Configured: {path}")
+    return [path for path, _, _ in applied]
 
 
 def configure(aws_config, codex_config):
+    """Write the AWS profiles and both Codex configs; return whether Codex's changed."""
     gov_config = codex_config.with_name("gov.config.toml")
 
     def read(path):
@@ -258,7 +274,7 @@ def configure(aws_config, codex_config):
     new_aws = aws_settings(read(aws_config))
     new_codex, legacy_gov = codex_settings(old_codex)
     new_gov = gov_codex_settings(old_gov, new_codex, legacy_gov)
-    write_configs(((aws_config, new_aws), (codex_config, new_codex), (gov_config, new_gov)))
+    changed = write_configs(((aws_config, new_aws), (codex_config, new_codex), (gov_config, new_gov)))
     # Advancing a superseded default replaces a value the user may have set by
     # hand, so report it rather than let it be a surprise. Reported after the
     # write, so a rollback never announces a change that did not land.
@@ -268,6 +284,30 @@ def configure(aws_config, codex_config):
             was, now = before.get(key), after.get(key)
             if was is not None and was != now:
                 print(f"{path.name}: {key} was {was}, now {now or 'unset (follows model)'}")
+    return codex_config in changed or gov_config in changed
+
+
+def restart_daemon():
+    """Restart the shared Codex app-server daemon if one is running.
+
+    The daemon reads config.toml only when it starts, and sessions get their
+    model list from it, so a daemon started before a config change keeps
+    offering the old provider's models, and `/model` then writes their IDs back
+    into the config. A restart interrupts the daemon's sessions, so it is done
+    only after setup changed a Codex config.
+    """
+    status = subprocess.run(["codex", "app-server", "daemon", "version"], capture_output=True, text=True)
+    try:
+        running = status.returncode == 0 and json.loads(status.stdout)["status"] == "running"
+    except (ValueError, KeyError):
+        running = False
+    if not running:
+        return
+    print("Restarting the Codex background server to load the new configuration...")
+    restart = subprocess.run(["codex", "app-server", "daemon", "restart"], capture_output=True, text=True)
+    if restart.returncode != 0:
+        print(f"Warning: could not restart the Codex background server: {restart.stderr.strip()}\n"
+              "Run `codex app-server daemon restart` before using /model.")
 
 
 def configure_git():
@@ -299,5 +339,7 @@ if __name__ == "__main__":
     user_dir = Path.home()
     aws_path = Path(os.environ.get("AWS_CONFIG_FILE", user_dir / ".aws/config"))
     codex_dir = Path(os.environ.get("CODEX_HOME", user_dir / ".codex"))
-    configure(aws_path, codex_dir / "config.toml")
+    codex_changed = configure(aws_path, codex_dir / "config.toml")
     configure_git()
+    if codex_changed:
+        restart_daemon()

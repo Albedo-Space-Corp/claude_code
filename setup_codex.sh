@@ -84,6 +84,6 @@ if ! aws sts get-caller-identity --profile prod-it01-bedrock >/dev/null 2>&1; th
     aws sso login --profile prod-it01-bedrock
 fi
 echo "Setup complete. Restart Codex or your IDE, then run codex."
-echo "Use /status to confirm amazon-bedrock and /model to choose a model."
+echo "Use /status to confirm amazon-bedrock-runtime and /model to choose a (US cross-region) model."
 echo "Use /plugins to browse the Albedo marketplace."
 echo "For GovCloud Bedrock: aws sso login --profile gc-prod-it01-bedrock, then codex --profile gov."

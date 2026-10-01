@@ -21,17 +21,72 @@ macOS requires Git (install Apple's Command Line Tools if prompted).
 The setup baseline is Codex CLI 0.154.0+ and AWS CLI 2.9.0+; older installations
 must be updated before configuration is changed.
 
-Restart Codex or your IDE after setup. Run `codex` and confirm `amazon-bedrock`
-in `/status`. The default model is `openai.gpt-6-astra`, the strongest Bedrock
-serves in commercial; `/model` lists the rest. A model you already selected is
-kept, so the default only applies to a fresh configuration.
+Restart Codex or your IDE after setup. Run `codex` and confirm `amazon-bedrock-runtime`
+in `/status`. The default model is `us.openai.gpt-6.1-sol` at medium reasoning;
+`/model` lists the rest. A model you already selected is kept, so the default
+only applies to a fresh configuration.
 Browse the Albedo marketplace with `/plugins`.
 
-The native provider uses commercial Bedrock in `us-west-2` and your
-`AlbedoBedrockUsers` role. No OpenAI API key or ChatGPT sign-in is needed.
-Fast Mode is unavailable on the current Bedrock connection.
+### Configuring by hand
+
+The installer is the supported path. It also creates the AWS profile the config
+below refers to, so if you have never run it, or `setup_ccb.sh` for Claude Code,
+add this to `~/.aws/config` first and run
+`aws sso login --profile prod-it01-bedrock`:
+
+```ini
+[sso-session albedo-commercial]
+sso_start_url = https://albedo.awsapps.com/start
+sso_region = us-west-2
+sso_registration_scopes = sso:account:access
+
+[profile prod-it01-bedrock]
+sso_session = albedo-commercial
+sso_account_id = 188343044386
+sso_role_name = AlbedoBedrockUsers
+region = us-west-2
+output = json
+```
+
+Then in `~/.codex/config.toml`, this is the whole of what Bedrock needs:
+
+```toml
+model = "us.openai.gpt-6.1-sol"
+model_provider = "amazon-bedrock-runtime"
+service_tier = "default"
+web_search = "disabled"
+
+[model_providers.amazon-bedrock-runtime.aws]
+profile = "prod-it01-bedrock"
+region = "us-west-2"
+```
+
+**The `model` line is required, and the `us.` prefix is the part that
+matters.** Bedrock Runtime serves these models only through US cross-Region
+inference profiles. Codex's own default, a bare `gpt-6.1-sol`, fails with
+`The provided model identifier is invalid`. A Mantle ID such as
+`openai.gpt-6.1-sol`, left over from an older setup, fails with
+`Invocation of model ID openai.gpt-6.1-sol with on-demand throughput isn't
+supported`. A `global.` ID fails with an explicit deny on `bedrock:InvokeModel`.
+Running the installer also fixes it, since it replaces a model Bedrock Runtime
+cannot serve. If Codex is already running, restart its background server after
+the edit (see below).
+
+The native Bedrock Runtime provider uses commercial Bedrock in `us-west-2` and
+your `AlbedoBedrockUsers` role. No OpenAI API key or ChatGPT sign-in is needed.
+**Pick only `(US cross-region)` models in `/model`.** Bedrock Runtime serves
+models as cross-Region inference profiles, and IAM denies the `(Global)` ones
+(`global.openai.*`), so they fail with an access error.
+Fast Mode and hosted web search are unavailable on Bedrock Runtime.
 See [OpenAI's Bedrock guide](https://learn.chatgpt.com/docs/amazon-bedrock)
 for supported features.
+
+When setup changes a Codex config, it restarts the Codex background server
+(`codex app-server daemon`) if one is running, which interrupts sessions that use
+it. The server reads `config.toml` only when it starts. A server started under an older configuration keeps
+offering that configuration's models, and `/model` then writes IDs Bedrock
+Runtime rejects. After editing `config.toml` by hand, run
+`codex app-server daemon restart`.
 
 ### Codex on GovCloud
 
@@ -42,9 +97,12 @@ codex --profile gov
 
 `--profile gov` layers `~/.codex/gov.config.toml` over your normal config, so
 plugins, instructions, and permissions carry over; only the Bedrock provider
-changes, to GovCloud Mantle in `us-gov-west-1` as your GovCloud
-`AlbedoBedrockUsers` role. Plain `codex` stays commercial. It composes with other
-flags (`codex --profile gov exec ...`). GovCloud offers `openai.gpt-5.6-terra`,
+changes, to GovCloud Mantle (`amazon-bedrock`) in `us-gov-west-1` as your GovCloud
+`AlbedoBedrockUsers` role. GovCloud Runtime serves no GPT-5.6 or GPT-6, so gov
+stays on Mantle, whose model IDs have no `us.` prefix. `/model` under the gov
+profile lists Codex's full Mantle catalog, including models GovCloud doesn't
+serve. Plain `codex` stays commercial. It composes with other flags
+(`codex --profile gov exec ...`). GovCloud offers `openai.gpt-5.6-terra`,
 `openai.gpt-5.6-luna`, and `openai.gpt-5.4`. The gov profile defaults to Terra,
 the strongest of those, rather than inheriting your commercial model, since
 GPT-6 Astra isn't in GovCloud. Set your own `model` in `gov.config.toml` and
@@ -66,9 +124,10 @@ up beside the originals. All configuration files are staged before replacement;
 if replacement fails, setup restores the original files. If restoration also fails,
 the error identifies the backup for manual recovery. Other AWS profiles, Codex instructions, permissions,
 MCP servers, and enabled plugins are preserved. Setup replaces the Bedrock provider
-and Albedo marketplace entries, turns Fast Mode off, and clears incompatible
-ChatGPT model selections. Existing `openai.*` model selections are kept; a
-configuration left without one gets the partition's default.
+and Albedo marketplace entries, turns Fast Mode and web search off, and clears
+incompatible model selections. In `config.toml`, an existing `us.openai.*`
+selection is kept; ChatGPT, Mantle (`openai.*`), and `global.*` selections are
+dropped. A configuration left without a model gets the partition's default.
 `AWS_CONFIG_FILE` and `CODEX_HOME` are honored when set.
 
 If SSO expires, run `aws sso login --profile prod-it01-bedrock` (or
