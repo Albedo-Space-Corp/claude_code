@@ -63,6 +63,7 @@ GOV_PROVIDER = {
 # that can never move, since the first run makes every later run a no-op. When a
 # pin changes, append the old value here in the same commit.
 COMMERCIAL_MODEL = "openai.gpt-6.1-sol"
+COMMERCIAL_EFFORT_LEVEL = "medium"
 SUPERSEDED_COMMERCIAL_MODELS = ()
 GOV_MODEL = "openai.gpt-5.6-terra"
 SUPERSEDED_GOV_MODELS = ("openai.gpt-5.6-luna",)
@@ -141,6 +142,7 @@ def codex_settings(text):
         del agents["default_subagent_model"]
     # Only `model` is pinned; review and subagent selections fall back to it.
     pin_model(config, "model", COMMERCIAL_MODEL, SUPERSEDED_COMMERCIAL_MODELS)
+    pin_model(config, "model_reasoning_effort", COMMERCIAL_EFFORT_LEVEL, ())
     providers = config.setdefault("model_providers", tomlkit.table())
     # Commercial needs only the AWS profile and region; the provider derives its
     # Mantle endpoint from the region.
