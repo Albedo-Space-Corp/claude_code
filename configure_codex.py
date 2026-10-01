@@ -62,7 +62,7 @@ GOV_PROVIDER = {
 # user and is left alone. Without the lists a pin is a one-shot initial value
 # that can never move, since the first run makes every later run a no-op. When a
 # pin changes, append the old value here in the same commit.
-COMMERCIAL_MODEL = "openai.gpt-6-astra"
+COMMERCIAL_MODEL = "openai.gpt-6.1-sol"
 SUPERSEDED_COMMERCIAL_MODELS = ()
 GOV_MODEL = "openai.gpt-5.6-terra"
 SUPERSEDED_GOV_MODELS = ("openai.gpt-5.6-luna",)
