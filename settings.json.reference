@@ -6,5 +6,8 @@
     "AWS_PROFILE": "prod-it01-bedrock",
     "AWS_REGION": "us-west-2",
     "CLAUDE_CODE_PLUGIN_KEEP_MARKETPLACE_ON_FAILURE": "1"
+  },
+  "permissions": {
+    "defaultMode": "default"
   }
 }

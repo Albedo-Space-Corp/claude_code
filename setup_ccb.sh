@@ -335,6 +335,7 @@ else
 
         REF_ENV=$(echo "$REFERENCE" | jq '.env')
         REF_AUTH=$(echo "$REFERENCE" | jq -r '.awsAuthRefresh')
+        REF_MODE=$(echo "$REFERENCE" | jq -r '.permissions.defaultMode')
 
         # awsAuthRefresh is force-updated (not set-if-absent) so existing installs
         # pick up the profile-following form. Warn if we're replacing a different
@@ -357,11 +358,15 @@ else
 
         # Merge reference env + awsAuthRefresh, strip the top-level model pin, and
         # strip any pinned model ARN env vars from older versions so Claude Code's
-        # native /model picker takes over.
+        # native /model picker takes over. permissions.defaultMode is set only if
+        # absent: it keeps new sessions out of auto mode (Claude Code's built-in
+        # default) while respecting a mode the user chose deliberately.
         jq --argjson new_env "$REF_ENV" \
-           --arg new_auth "$REF_AUTH" '
+           --arg new_auth "$REF_AUTH" \
+           --arg new_mode "$REF_MODE" '
           .awsAuthRefresh = $new_auth |
           .env = (.env // {}) + $new_env |
+          .permissions.defaultMode //= $new_mode |
           del(.model) |
           del(.env.ANTHROPIC_DEFAULT_OPUS_MODEL,
               .env.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME,

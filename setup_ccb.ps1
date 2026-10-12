@@ -502,6 +502,16 @@ if (Test-Path $claudeSettings) {
             $existing.PSObject.Properties.Remove("model")
         }
 
+        # permissions.defaultMode is set only if absent: it keeps new sessions
+        # out of auto mode (Claude Code's built-in default) while respecting a
+        # mode the user chose deliberately.
+        $refMode = $referenceObj.permissions.defaultMode
+        if (-not $existing.PSObject.Properties["permissions"] -or $existing.permissions -isnot [PSCustomObject]) {
+            $existing | Add-Member -NotePropertyName "permissions" -NotePropertyValue ([PSCustomObject]@{ defaultMode = $refMode }) -Force
+        } elseif (-not $existing.permissions.defaultMode) {
+            $existing.permissions | Add-Member -NotePropertyName "defaultMode" -NotePropertyValue $refMode -Force
+        }
+
         $merged = $existing | ConvertTo-Json -Depth 10
         Write-Utf8NoBom -Path $claudeSettings -Content $merged
         Write-Ok "Settings merged"
