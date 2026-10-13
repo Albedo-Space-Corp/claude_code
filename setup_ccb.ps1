@@ -528,7 +528,9 @@ if (Test-Path $claudeSettings) {
 # 400 invalid model). A --settings file layers over the base settings.json
 # (hooks/plugins/statusline inherited) and its env block wins. Model pinned via
 # ANTHROPIC_DEFAULT_OPUS_MODEL + "model":"opus" (a raw gov model string in the
-# "model" field is ignored across files). No Haiku var: no usable Haiku in gov.
+# "model" field is ignored across files). Pinning Haiku keeps background tasks
+# off the primary model; gov publishes no 1M Haiku profile, so that pin alone
+# carries no [1m] suffix.
 #
 # KEEP_MARKETPLACE_ON_FAILURE: the marketplace refresh that runs in the
 # background after startup does a `git pull` on the marketplace remote, which
@@ -549,6 +551,7 @@ $govSettingsContent = @'
     "AWS_REGION": "us-gov-west-1",
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "us-gov.anthropic.claude-opus-5-5[1m]",
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "us-gov.anthropic.claude-sonnet-5-5[1m]",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "us-gov.anthropic.claude-haiku-5-5",
     "CLAUDE_CODE_PLUGIN_KEEP_MARKETPLACE_ON_FAILURE": "1"
   },
   "model": "opus"

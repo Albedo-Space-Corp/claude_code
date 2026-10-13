@@ -151,6 +151,10 @@ irm https://raw.githubusercontent.com/Albedo-Space-Corp/claude_code/refs/heads/m
 
 ## What's New
 
+**v5.5.0, a Haiku tier in GovCloud.** GovCloud finally serves a current Haiku, so
+`claude-gov` background tasks no longer run on your primary model. If you already use
+`claude-gov`, re-run the update script above to pick up the pin. Commercial is unchanged.
+
 **v5.4.0, marketplace over CodeCommit.** The Albedo plugin marketplace is now an AWS
 CodeCommit repository, cloned over HTTPS with your existing `prod-it01-bedrock` SSO role.
 Nothing extra to install, no second account, no credential to keep. Model selection and
@@ -199,10 +203,10 @@ claude-gov      # GovCloud Bedrock (gc-prod-it01-bedrock, us-gov-west-1)
 layers over your normal config (hooks, plugins, and statusline all carry over) and switches
 the AWS profile, region, and models to GovCloud. It composes with flags: `claude-gov --resume`.
 
-GovCloud has a smaller catalog (Opus 5.5 and Sonnet 5.5); the gov settings file pins the correct
-`us-gov.` inference profiles for you, because Claude Code's `/model` picker resolves its gov
-aliases to older models and never to the 1M-context variants. Background tasks run on your
-primary model (there is no Haiku tier in GovCloud yet).
+GovCloud has a smaller catalog (Opus 5.5, Sonnet 5.5, and Haiku 5.5); the gov settings file pins
+the correct `us-gov.` inference profiles for you, because Claude Code's `/model` picker resolves
+its gov aliases to older models and never to the 1M-context variants. Opus and Sonnet get the
+1M-context profiles; GovCloud publishes no 1M Haiku, so `haiku` uses the standard profile.
 
 > GovCloud access requires the `AlbedoBedrockUsers` role in the GovCloud account, which
 > your SSO login grants. If `claude-gov` fails at login, ask in #it-help.
