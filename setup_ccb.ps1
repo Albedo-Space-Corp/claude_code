@@ -529,8 +529,11 @@ if (Test-Path $claudeSettings) {
 # (hooks/plugins/statusline inherited) and its env block wins. Model pinned via
 # ANTHROPIC_DEFAULT_OPUS_MODEL + "model":"opus" (a raw gov model string in the
 # "model" field is ignored across files). Pinning Haiku keeps background tasks
-# off the primary model; gov publishes no 1M Haiku profile, so that pin alone
-# carries no [1m] suffix.
+# off the primary model; gov publishes no 1M Haiku profile, so that pin carries
+# no [1m] suffix. The Fable pin carries none either: Fable's window is natively
+# 1M, and Claude Code's own Fable IDs are commercial us. profiles that the gov
+# role denies, so without the pin `/model fable` fails. "model" stays opus, so
+# Fable is opt-in per session.
 #
 # KEEP_MARKETPLACE_ON_FAILURE: the marketplace refresh that runs in the
 # background after startup does a `git pull` on the marketplace remote, which
@@ -552,6 +555,7 @@ $govSettingsContent = @'
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "us-gov.anthropic.claude-opus-5-5[1m]",
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "us-gov.anthropic.claude-sonnet-5-5[1m]",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "us-gov.anthropic.claude-haiku-5-5",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL": "us-gov.anthropic.claude-fable-5-2",
     "CLAUDE_CODE_PLUGIN_KEEP_MARKETPLACE_ON_FAILURE": "1"
   },
   "model": "opus"
