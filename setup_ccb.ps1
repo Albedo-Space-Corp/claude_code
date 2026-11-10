@@ -526,13 +526,14 @@ if (Test-Path $claudeSettings) {
 # overrides process env, so setting $env:AWS_REGION in a function is defeated by
 # the commercial region in settings.json (gov model ID -> commercial endpoint ->
 # 400 invalid model). A --settings file layers over the base settings.json
-# (hooks/plugins/statusline inherited) and its env block wins. Model pinned via
-# ANTHROPIC_DEFAULT_OPUS_MODEL + "model":"opus" (a raw gov model string in the
-# "model" field is ignored across files). Pinning Haiku keeps background tasks
-# off the primary model; gov publishes no 1M Haiku profile, so that pin carries
-# no [1m] suffix. The Fable pin carries none either: Fable's window is natively
-# 1M, and Claude Code's own Fable IDs are commercial us. profiles that the gov
-# role denies, so without the pin `/model fable` fails. "model" stays opus, so
+# (hooks/plugins/statusline inherited) and its env block wins. Every tier is
+# pinned to a us-gov. ID: the picker's alias targets follow Claude Code's
+# catalog, not this account's grants, so some land on an older model or one gov
+# doesn't serve. Model pinned via ANTHROPIC_DEFAULT_OPUS_MODEL + "model":"opus"
+# (a raw gov model string in the "model" field is ignored across files).
+# Pinning Haiku keeps background tasks off the primary model; gov publishes no
+# 1M Haiku profile, so that pin carries no [1m] suffix. The Fable pin carries
+# none either, because Fable's window is natively 1M. "model" stays opus, so
 # Fable is opt-in per session.
 #
 # KEEP_MARKETPLACE_ON_FAILURE: the marketplace refresh that runs in the

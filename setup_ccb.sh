@@ -245,17 +245,17 @@ fi
 # invalid model). A --settings file instead LAYERS on top of the base
 # settings.json (hooks/plugins/statusline inherited) and its env block wins.
 #
-# gov.settings.json pins the gov profile/region and the us-gov. model IDs. We
-# pin rather than trust the /model picker: the picker emits valid us-gov. IDs,
-# but its aliases resolve to older models than the account offers and never to
-# the 1M variants. Model is set via ANTHROPIC_DEFAULT_OPUS_MODEL +
-# "model":"opus" so the alias resolves through the pin (a raw gov model string
-# in the "model" field is ignored across files). Pinning Haiku keeps background
-# tasks off the primary model; gov publishes no 1M Haiku profile, so that pin
-# carries no [1m] suffix. The Fable pin carries none either: Fable's window is
-# natively 1M, and Claude Code's own Fable IDs are commercial us. profiles that
-# the gov role denies, so without the pin `/model fable` fails. "model" stays
-# opus, so Fable is opt-in per session.
+# gov.settings.json pins the gov profile/region and a us-gov. model ID for
+# every tier. The /model picker emits valid us-gov. IDs, but its alias targets
+# follow Claude Code's catalog, not what this account has been granted: some
+# land on an older model or one gov doesn't serve, and any can move with a
+# Claude Code release. Pinning every tier keeps gov on models granted here.
+# Model is set via ANTHROPIC_DEFAULT_OPUS_MODEL + "model":"opus" so the alias
+# resolves through the pin (a raw gov model string in the "model" field is
+# ignored across files). Pinning Haiku keeps background tasks off the primary
+# model; gov publishes no 1M Haiku profile, so that pin carries no [1m] suffix.
+# The Fable pin carries none either, because Fable's window is natively 1M.
+# "model" stays opus, so Fable is opt-in per session.
 #
 # KEEP_MARKETPLACE_ON_FAILURE: the marketplace refresh that runs in the
 # background after startup does a `git pull` on the marketplace remote, which

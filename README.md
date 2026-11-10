@@ -211,7 +211,7 @@ the AWS profile, region, and models to GovCloud. It composes with flags: `claude
 
 GovCloud has a smaller catalog (Opus 5.5, Sonnet 5.5, Haiku 5.5, and Fable 5.2); the gov settings
 file pins the correct `us-gov.` inference profiles for you, because Claude Code's `/model` picker
-resolves its gov aliases to older models and never to the 1M-context variants. Opus and Sonnet get
+resolves some gov aliases to older models or to models GovCloud doesn't serve. Opus and Sonnet get
 the 1M-context profiles; GovCloud publishes no 1M Haiku, so `haiku` uses the standard profile.
 Fable's context window is 1M natively. Fable is opt-in: pick it with `/model fable`.
 
